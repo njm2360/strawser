@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import sharp, { type Region, type Sharp } from "sharp";
 import { getActivePage, getViewport } from "./browser.ts";
 
@@ -35,18 +36,25 @@ const WEBP_EFFORT = 6;
 
 const SIG_WIDTH = 90;
 
+export interface EncodedTile {
+  data: Buffer;
+  // バイト列の識別子。同じ絵ならWebPの出力も一致するので、
+  // 戻る・進むでは送信済みのものと同じhashになる
+  hash: string;
+}
+
 export interface Tile {
   sig: Buffer; // 差分判定用の縮小グレースケール署名（rawピクセル）
   // WebPへのエンコードは送信直前まで遅らせる。再キャプチャでは大半のタイルが
   // 変化なしで捨てられるうえ、送る分も優先順の高いものから先に符号化したい
-  encode: () => Promise<Buffer>;
+  encode: () => Promise<EncodedTile>;
 }
 
 // 符号化が済んだ時点で元PNGへの参照を切る。タイルは差し替わるまでCurrentPageに残るので、
 // 掴んだままだとキャプチャ世代ぶんのPNGが積み上がる
 function makeTile(source: Sharp, region: Region, sig: Buffer): Tile {
   let src: Sharp | undefined = source;
-  let inflight: Promise<Buffer> | undefined;
+  let inflight: Promise<EncodedTile> | undefined;
   return {
     sig,
     encode: () =>
@@ -57,7 +65,7 @@ function makeTile(source: Sharp, region: Region, sig: Buffer): Tile {
         .toBuffer()
         .then((data) => {
           src = undefined;
-          return data;
+          return { data, hash: createHash("sha1").update(data).digest("hex").slice(0, 16) };
         })),
   };
 }

@@ -31,7 +31,8 @@ export type ClientMsg =
   | { type: "key"; key: "Enter" | "Backspace" }
   | { type: "setMode"; mode: "page" | "live" }        // ライブモード切替
   | { type: "liveAck" }                               // ライブフレーム受信確認（次フレーム送信の許可）
-  | { type: "requestTiles"; indices: number[] };      // 明示的なタイル再要求
+  // tileRefで指されたタイルが手元に無かったときの再要求。サーバーは実体を送り直す
+  | { type: "requestTiles"; indices: number[] };
 
 // ---- サーバー → クライアント ----
 export type ServerMsg =
@@ -41,8 +42,12 @@ export type ServerMsg =
   // pageWidthはこのページのタイルを撮ったエミュレーション幅。以降の座標はすべてこれが基準
   | { type: "pageBegin"; pageId: string; url: string; title: string; pageWidth: number;
       fullHeight: number; tileHeight: number; tileCount: number }
+  // hashはこのタイルのバイト列の識別子。クライアントは受け取った実体をhashで持っておく
   | { type: "tileHeader"; pageId: string; tileIndex: number; offsetY: number;
-      format: "webp"; byteLength: number }
+      format: "webp"; byteLength: number; hash: string }
+  // 送信済みのタイルと同じ絵。実体を送らずhashで参照する（戻る・進むでほぼ全面が一致する）。
+  // 手元に無ければrequestTilesで実体を要求すること
+  | { type: "tileRef"; pageId: string; tileIndex: number; offsetY: number; hash: string }
   | { type: "pageExtend"; pageId: string; newFullHeight: number; addedTiles: number }
   // scrollY: フレーム時点の実ページのスクロール位置（ページ座標）。
   // ライブ中のタップ座標変換とクライアント側スクロール量の基準に使う

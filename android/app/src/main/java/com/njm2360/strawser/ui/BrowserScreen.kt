@@ -188,12 +188,12 @@ fun BrowserScreen(
                     else -> {}
                 }
             },
-            onTile = { header, bytes ->
+            onTile = { pageId, tileIndex, bytes ->
                 val target = page ?: return@WsClient
-                if (target.pageId != header.pageId) return@WsClient
+                if (target.pageId != pageId) return@WsClient
                 val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (bmp != null) {
-                    target.tiles[header.tileIndex] = bmp.asImageBitmap()
+                    target.tiles[tileIndex] = bmp.asImageBitmap()
                 } else {
                     android.util.Log.w("BrowserScreen", "tile decode failed (${bytes.size} bytes)")
                 }

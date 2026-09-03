@@ -97,6 +97,7 @@ sealed interface ClientMsg {
     @SerialName("liveAck")
     data object LiveAck : ClientMsg
 
+    // tileRefで指されたタイルが手元に無かったときの再要求
     @Serializable
     @SerialName("requestTiles")
     data class RequestTiles(val indices: List<Int>) : ClientMsg
@@ -132,7 +133,8 @@ sealed interface ServerMsg {
         val tileCount: Int,
     ) : ServerMsg
 
-    // 直後のバイナリフレームがタイル本体。offsetY はページ座標
+    // 直後のバイナリフレームがタイル本体。offsetYはページ座標。
+    // hashはバイト列の識別子で、tileRefから参照される
     @Serializable
     @SerialName("tileHeader")
     data class TileHeader(
@@ -141,6 +143,18 @@ sealed interface ServerMsg {
         val offsetY: Int,
         val format: String,
         val byteLength: Int,
+        val hash: String,
+    ) : ServerMsg
+
+    // 受信済みのタイルと同じ絵。実体は届かないのでhashで引く。
+    // 持っていなければrequestTilesで実体を要求する
+    @Serializable
+    @SerialName("tileRef")
+    data class TileRef(
+        val pageId: String,
+        val tileIndex: Int,
+        val offsetY: Int,
+        val hash: String,
     ) : ServerMsg
 
     // ページ末尾への継ぎ足し（無限スクロール・長大ページ対応）

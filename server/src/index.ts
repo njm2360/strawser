@@ -63,6 +63,23 @@ interface CurrentPage {
   contentHeight: number; // 実ページ全体の高さ（fullHeight より大きければ未取得部分あり）
   tiles: Tile[];
   pending: Set<number>; // 未送信 or 更新されたタイル index
+  // tileRefが外れてクライアントから要求し直されたindex。実体を送る
+  forceRaw: Set<number>;
+}
+
+// クライアントが持っているとみなすタイルのバイト列（新しい順）。
+// tileRefで済ませるかどうかの判断に使う。クライアント側のキャッシュはこれより
+// 大きく取ってあるが、食い違ってもrequestTilesで要求され直すだけで済む
+const SENT_HASH_LIMIT = 400;
+const sentHashes = new Set<string>();
+
+function rememberHash(hash: string): void {
+  sentHashes.delete(hash); // 再挿入して最近使った順にする
+  sentHashes.add(hash);
+  for (const old of sentHashes) {
+    if (sentHashes.size <= SENT_HASH_LIMIT) break;
+    sentHashes.delete(old);
+  }
 }
 
 let current: CurrentPage | undefined;
@@ -102,19 +119,28 @@ async function pumpTiles(): Promise<void> {
       const tile = page.tiles[index];
       if (!tile) continue;
       // pendingから外した後なので、失敗したタイルはrequestTilesで拾い直してもらう
-      const data = await tile.encode().catch((e) => {
+      const encoded = await tile.encode().catch((e) => {
         console.error(`tile ${index} encode failed:`, e);
         return undefined;
       });
       // 符号化を待つ間にページが差し替わっていたら送らない
-      if (!data || current !== page) continue;
+      if (!encoded || current !== page) continue;
+      const { data, hash } = encoded;
+      const offsetY = index * page.tileHeight;
+      const raw = page.forceRaw.delete(index) || !sentHashes.has(hash);
+      rememberHash(hash);
+      if (!raw) {
+        send({ type: "tileRef", pageId: page.pageId, tileIndex: index, offsetY, hash });
+        continue;
+      }
       send({
         type: "tileHeader",
         pageId: page.pageId,
         tileIndex: index,
-        offsetY: index * page.tileHeight,
+        offsetY,
         format: "webp",
         byteLength: data.byteLength,
+        hash,
       });
       console.log(`-> binary tile ${index} (${data.byteLength} bytes)`);
       // 送信完了（ソケットへのフラッシュ）を待ってから次のタイルを選ぶ
@@ -202,6 +228,7 @@ async function captureOnce(forceNew: boolean): Promise<void> {
     contentHeight: cap.contentHeight,
     tiles: cap.tiles,
     pending: new Set(cap.tiles.map((_, i) => i)),
+    forceRaw: new Set(),
   };
   send({
     type: "pageBegin",
@@ -603,7 +630,9 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
     case "requestTiles":
       if (current) {
         for (const i of msg.indices) {
-          if (i >= 0 && i < current.tiles.length) current.pending.add(i);
+          if (i < 0 || i >= current.tiles.length) continue;
+          current.pending.add(i);
+          current.forceRaw.add(i);
         }
         void pumpTiles();
       }
@@ -623,6 +652,7 @@ async function main(): Promise<void> {
       return;
     }
     console.log("client connected");
+    sentHashes.clear(); // 別のクライアントはタイルを持っていない
     client?.close(CLOSE_SUPERSEDED, "superseded");
     client = ws;
     liveFrameInFlight = false; // 旧接続の liveAck は二度と来ない
