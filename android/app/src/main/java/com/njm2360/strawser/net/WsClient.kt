@@ -24,10 +24,12 @@ class WsClient(
     private val onLiveFrame: (header: ServerMsg.LiveFrameHeader, bytes: ByteArray) -> Unit,
     private val onConnectionChange: (connected: Boolean) -> Unit,
     private val onAuthError: () -> Unit,
+    private val onSuperseded: () -> Unit,
 ) {
     companion object {
         private const val TAG = "WsClient"
         private const val CLOSE_UNAUTHORIZED = 4001
+        private const val CLOSE_SUPERSEDED = 4002
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -40,15 +42,19 @@ class WsClient(
     @Volatile private var pendingHeader: ServerMsg? = null // TileHeader or LiveFrameHeader
     @Volatile private var retryCount = 0
 
+    // close()と切れ目なく行う。間に割り込むと閉じ先の無いソケットが残って再接続し続ける
+    @Synchronized
     fun connect() {
         if (closed) return
         val request = Request.Builder().url(serverUrl).build()
         ws = httpClient.newWebSocket(request, listener)
     }
 
+    @Synchronized
     fun close() {
         closed = true
         ws?.close(1000, "bye")
+        ws = null
         reconnectExecutor.shutdownNow()
         httpClient.dispatcher.executorService.shutdown()
     }
@@ -57,6 +63,7 @@ class WsClient(
         ws?.send(protocolJson.encodeToString(ClientMsg.serializer(), msg))
     }
 
+    @Synchronized
     private fun scheduleReconnect() {
         if (closed) return
         onConnectionChange(false)
@@ -64,6 +71,13 @@ class WsClient(
         retryCount++
         Log.i(TAG, "reconnecting in ${delayMs}ms")
         reconnectExecutor.schedule({ connect() }, delayMs, TimeUnit.MILLISECONDS)
+    }
+
+    /** 以後connect()は無視される */
+    @Synchronized
+    private fun stopReconnecting() {
+        closed = true
+        onConnectionChange(false)
     }
 
     private val listener = object : WebSocketListener() {
@@ -124,14 +138,18 @@ class WsClient(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             Log.i(TAG, "ws closed: $code $reason")
-            if (code == CLOSE_UNAUTHORIZED) {
-                // 認証エラーは再接続しても直らないので打ち切って通知する
-                closed = true
-                onConnectionChange(false)
-                onAuthError()
-                return
+            when (code) {
+                // 認証エラーは再接続しても直らない
+                CLOSE_UNAUTHORIZED -> {
+                    stopReconnecting()
+                    onAuthError()
+                }
+                CLOSE_SUPERSEDED -> {
+                    stopReconnecting()
+                    onSuperseded()
+                }
+                else -> scheduleReconnect()
             }
-            scheduleReconnect()
         }
     }
 }

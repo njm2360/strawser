@@ -18,6 +18,10 @@ import type { ClientMsg, ServerMsg } from "./protocol.ts";
 const PORT = 8080;
 const config = loadConfig();
 
+const CLOSE_UNAUTHORIZED = 4001;
+// 受け取った側は再接続してはならない。し合うと互いを蹴り続ける
+const CLOSE_SUPERSEDED = 4002;
+
 // セッションは 1 つ、後勝ち
 let client: WebSocket | undefined;
 
@@ -482,11 +486,11 @@ async function main(): Promise<void> {
     const token = new URL(req.url ?? "/", "ws://localhost").searchParams.get("token");
     if (token !== config.token) {
       console.log("client rejected: bad token");
-      ws.close(4001, "unauthorized");
+      ws.close(CLOSE_UNAUTHORIZED, "unauthorized");
       return;
     }
     console.log("client connected");
-    client?.close(1000, "superseded");
+    client?.close(CLOSE_SUPERSEDED, "superseded");
     client = ws;
     liveFrameInFlight = false; // 旧接続の liveAck は二度と来ない
 

@@ -149,6 +149,7 @@ fun BrowserScreen(
             },
             onConnectionChange = { connected = it },
             onAuthError = onAuthError,
+            onSuperseded = { errorText = "別の接続に切り替わりました。⚙ から接続し直してください" },
         )
     }
     DisposableEffect(client) {
