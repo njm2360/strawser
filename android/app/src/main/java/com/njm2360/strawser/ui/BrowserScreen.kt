@@ -3,6 +3,7 @@ package com.njm2360.strawser.ui
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
@@ -37,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -47,6 +49,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.net.ClientMsg
@@ -82,6 +85,7 @@ private class RemotePage(
 @Composable
 fun BrowserScreen(
     serverUrl: String,
+    onOpenSettings: () -> Unit,
     onAuthError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -158,6 +162,7 @@ fun BrowserScreen(
             navState = navState,
             connected = connected,
             liveMode = liveMode,
+            onOpenSettings = onOpenSettings,
             onNavigate = { client.send(ClientMsg.Navigate(it)) },
             onBack = { client.send(ClientMsg.Back) },
             onForward = { client.send(ClientMsg.Forward) },
@@ -212,12 +217,36 @@ fun BrowserScreen(
 }
 
 @Composable
+private fun BarButton(
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    color: Color = MaterialTheme.colorScheme.primary,
+    style: TextStyle? = null,
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(MaterialTheme.shapes.small)
+            .clickable(enabled = enabled, onClick = onClick),
+    ) {
+        Text(
+            text = label,
+            color = if (enabled) color else MaterialTheme.colorScheme.outlineVariant,
+            style = style ?: MaterialTheme.typography.bodyLarge,
+        )
+    }
+}
+
+@Composable
 private fun UrlBar(
     urlInput: String,
     onUrlChange: (String) -> Unit,
     navState: ServerMsg.NavState?,
     connected: Boolean,
     liveMode: Boolean,
+    onOpenSettings: () -> Unit,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
@@ -233,9 +262,9 @@ private fun UrlBar(
             .fillMaxWidth()
             .padding(horizontal = 4.dp),
     ) {
-        TextButton(onClick = onBack, enabled = navState?.canGoBack == true) { Text("←") }
-        TextButton(onClick = onForward, enabled = navState?.canGoForward == true) { Text("→") }
-        TextButton(onClick = onReload, enabled = connected) { Text("⟳") }
+        BarButton("←", onBack, enabled = navState?.canGoBack == true)
+        BarButton("→", onForward, enabled = navState?.canGoForward == true)
+        BarButton("⟳", onReload, enabled = connected)
         OutlinedTextField(
             value = urlInput,
             onValueChange = onUrlChange,
@@ -262,13 +291,14 @@ private fun UrlBar(
                 .focusRequester(urlFocusRequester),
         )
         // 動画やアニメーションはタイル配信では追えないのでスクリーンキャストへ切り替える
-        TextButton(onClick = onToggleLive, enabled = connected) {
-            Text(
-                text = "LIVE",
-                color = if (liveMode) Color(0xFFF44336) else MaterialTheme.colorScheme.outline,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
+        BarButton(
+            label = "LIVE",
+            onClick = onToggleLive,
+            enabled = connected,
+            color = if (liveMode) Color(0xFFF44336) else MaterialTheme.colorScheme.outline,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        BarButton("⚙", onOpenSettings)
         Box(
             modifier = Modifier
                 .padding(8.dp)
