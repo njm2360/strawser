@@ -79,6 +79,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.SearchEngine
+import com.njm2360.strawser.decodeUrlForDisplay
 import com.njm2360.strawser.net.ClientMsg
 import com.njm2360.strawser.net.ServerMsg
 import com.njm2360.strawser.net.TileStore
@@ -94,14 +95,6 @@ import kotlin.math.roundToInt
 // URLバーの高さ。ビューポート高さをIMEで変えるとサーバーが毎回撮り直すので、
 // 実測せず画面高さから引く
 private const val URL_BAR_DP = 56
-
-// URL バー表示用: %E6%97%A5... のパーセントエンコードを読める形に戻す
-// （+ は URLDecoder が空白にしてしまうため一旦退避する）
-private fun decodeUrlForDisplay(url: String): String = try {
-    java.net.URLDecoder.decode(url.replace("+", "%2B"), "UTF-8")
-} catch (_: Exception) {
-    url
-}
 
 /**
  * 1ページ分のタイル群。hashesは届いた分だけ埋まる。pageExtendで末尾に伸びる。
