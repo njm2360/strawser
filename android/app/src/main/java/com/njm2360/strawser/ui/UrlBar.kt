@@ -70,7 +70,7 @@ internal fun UrlBar(
             placeholder = "URL",
             imeAction = ImeAction.Go,
             onAction = {
-                if (urlInput.isNotBlank()) onNavigate(urlInput.trim())
+                if (connected && urlInput.isNotBlank()) onNavigate(urlInput.trim())
                 focusManager.clearFocus()
                 keyboardController?.hide()
             },
@@ -93,13 +93,14 @@ internal fun UrlBar(
             BarButton("⋮", { menuOpen = true })
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                    BarButton("←", { menuOpen = false; onBack() }, navState?.canGoBack == true)
-                    BarButton("→", { menuOpen = false; onForward() }, navState?.canGoForward == true)
+                    BarButton("←", { menuOpen = false; onBack() }, connected && navState?.canGoBack == true)
+                    BarButton("→", { menuOpen = false; onForward() }, connected && navState?.canGoForward == true)
                     BarButton("⟳", { menuOpen = false; onReload() }, connected)
                 }
                 HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("新しいタブ") },
+                    enabled = connected,
                     onClick = { menuOpen = false; onNewTab() },
                 )
                 DropdownMenuItem(

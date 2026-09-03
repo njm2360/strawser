@@ -101,7 +101,8 @@ fun BrowserScreen(
                 onReload = state::reload,
                 onToggleLive = state::toggleLive,
             )
-            if (state.navState?.loading == true) {
+            // 読み込み中に切れるとloading falseが二度と来ない
+            if (state.connected && state.navState?.loading == true) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
             state.errorText?.let {
@@ -149,6 +150,7 @@ fun BrowserScreen(
             TabListOverlay(
                 tabs = state.tabs,
                 activeTabId = state.activeTabId,
+                connected = state.connected,
                 onSelect = {
                     state.selectTab(it)
                     showTabs = false

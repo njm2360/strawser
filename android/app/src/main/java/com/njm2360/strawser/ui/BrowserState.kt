@@ -86,18 +86,20 @@ internal class BrowserState(
                 liveWidth = header.pageWidth
             }
         },
-        onConnectionChange = { connected = it },
+        onConnectionChange = { online ->
+            connected = online
+            // 切断でリモート側のモードと入力フォーカスは失われる
+            if (!online) {
+                liveMode = false
+                showInput = false
+            }
+        },
         onAuthError = onAuthError,
         onSuperseded = { errorText = "別の接続に切り替わりました。メニューの接続設定から繋ぎ直してください" },
     )
 
     private fun receive(msg: ServerMsg) {
         when (msg) {
-            is ServerMsg.HelloAck -> {
-                // 再接続時はサーバーがページモードへ戻すのでUI状態も揃える
-                liveMode = false
-                showInput = false
-            }
             is ServerMsg.PageBegin -> {
                 page = RemotePage(
                     pageId = msg.pageId,

@@ -26,6 +26,7 @@ import com.njm2360.strawser.net.ServerMsg
 internal fun TabListOverlay(
     tabs: List<ServerMsg.TabInfo>,
     activeTabId: String,
+    connected: Boolean,
     onSelect: (String) -> Unit,
     onCloseTab: (String) -> Unit,
     onNewTab: () -> Unit,
@@ -39,12 +40,13 @@ internal fun TabListOverlay(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
+                // 全画面なのでURLバーの接続ランプが見えない
                 Text(
-                    text = "タブ",
+                    text = if (connected) "タブ" else "タブ（未接続）",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
-                BarButton("＋", onNewTab)
+                BarButton("＋", onNewTab, connected)
                 BarButton("✕", onDismiss)
             }
             HorizontalDivider()
@@ -53,6 +55,7 @@ internal fun TabListOverlay(
                     TabListRow(
                         tab = tab,
                         active = tab.id == activeTabId,
+                        enabled = connected,
                         onSelect = { onSelect(tab.id) },
                         onClose = { onCloseTab(tab.id) },
                     )
@@ -66,6 +69,7 @@ internal fun TabListOverlay(
 private fun TabListRow(
     tab: ServerMsg.TabInfo,
     active: Boolean,
+    enabled: Boolean,
     onSelect: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -77,7 +81,7 @@ private fun TabListRow(
             .background(
                 if (active) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
             )
-            .clickable(onClick = onSelect)
+            .clickable(enabled = enabled, onClick = onSelect)
             .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -97,6 +101,6 @@ private fun TabListRow(
                 )
             }
         }
-        BarButton("✕", onClose, color = MaterialTheme.colorScheme.outline)
+        BarButton("✕", onClose, enabled, color = MaterialTheme.colorScheme.outline)
     }
 }
