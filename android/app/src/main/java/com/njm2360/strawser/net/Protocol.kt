@@ -54,6 +54,18 @@ sealed interface ClientMsg {
     data object Reload : ClientMsg
 
     @Serializable
+    @SerialName("newTab")
+    data class NewTab(val url: String? = null) : ClientMsg
+
+    @Serializable
+    @SerialName("closeTab")
+    data class CloseTab(val tabId: String) : ClientMsg
+
+    @Serializable
+    @SerialName("selectTab")
+    data class SelectTab(val tabId: String) : ClientMsg
+
+    @Serializable
     @SerialName("tap")
     data class Tap(val x: Double, val y: Double) : ClientMsg
 
@@ -159,6 +171,14 @@ sealed interface ServerMsg {
         val scrollY: Int,
         val pageWidth: Int,
     ) : ServerMsg
+
+    @Serializable
+    data class TabInfo(val id: String, val title: String, val url: String)
+
+    // タブの増減・表示中タブ・タイトル更新のたびに一覧ごと届く
+    @Serializable
+    @SerialName("tabs")
+    data class Tabs(val tabs: List<TabInfo>, val activeId: String) : ServerMsg
 
     @Serializable
     @SerialName("focus")

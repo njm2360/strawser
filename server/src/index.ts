@@ -7,6 +7,13 @@ import {
   getViewport,
   setViewport,
   clampViewport,
+  getTabs,
+  getActiveTab,
+  getActiveTabId,
+  selectTab,
+  openTab,
+  closeTab,
+  type Tab,
 } from "./browser.ts";
 import {
   captureFullPage,
@@ -366,14 +373,104 @@ async function sendNavState(loading: boolean): Promise<void> {
   }
 }
 
+// ---- タブ ----
+
+// キャプチャ状態もライブのscreencastも表示中タブの分しか持たないので、
+// 背景タブのイベントはidで弾く
+let shownTabId = "";
+
+function sendTabs(): void {
+  send({
+    type: "tabs",
+    tabs: getTabs().map((t) => ({ id: t.id, title: t.title, url: t.url })),
+    activeId: getActiveTabId(),
+  });
+}
+
+async function activateTab(previous: Tab | undefined): Promise<void> {
+  if (previous && mode === "live") {
+    await previous.cdp.send("Page.stopScreencast").catch(() => {});
+  }
+  shownTabId = getActiveTabId();
+  current = undefined;
+  clientScrollY = 0;
+  pageLoading = false;
+  navGen++;
+  const view = getViewport();
+  await getActiveTab()
+    .page.setViewportSize({ width: view.width, height: view.height })
+    .catch(() => {});
+  sendTabs();
+  await sendNavState(false);
+  if (mode === "live") await startScreencast();
+  else await captureAndSend(true);
+}
+
+function attachTab(tab: Tab): void {
+  // ライブモード: Chromeへは即Ackして生成を止めず、常に最新フレームだけを保持。
+  // クライアントへはliveAckが返ってくるまで次を送らない（1枚ずつ、古いフレームは捨てる）
+  tab.cdp.on("Page.screencastFrame", (params) => {
+    void tab.cdp.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {});
+    if (tab.id !== getActiveTabId()) return;
+    liveMetaScrollY = Math.round(params.metadata.scrollOffsetY);
+    latestLiveFrame = {
+      data: Buffer.from(params.data, "base64"),
+      scrollY: liveMetaScrollY,
+    };
+    trySendLiveFrame();
+  });
+
+  tab.page.on("load", () => {
+    tab.url = tab.page.url();
+    void tab.page
+      .title()
+      .then((title) => {
+        tab.title = title;
+        sendTabs();
+      })
+      .catch(() => {});
+    if (tab.id !== getActiveTabId()) return;
+    pageLoading = false;
+    void sendNavState(false);
+    send({ type: "focus", kind: "none" }); // 新しいページにフォーカスは残らない
+    if (mode === "page") void captureAndSend(true);
+  });
+
+  let loadingTimeout: NodeJS.Timeout | undefined;
+  tab.page.on("framenavigated", (frame) => {
+    if (frame !== tab.page.mainFrame()) return;
+    tab.url = frame.url();
+    sendTabs();
+    if (tab.id !== getActiveTabId()) return;
+    pageLoading = true;
+    navGen++;
+    // リンクタップ等での遷移でも旧ページの未送信タイルを破棄する
+    current?.pending.clear();
+    // 同一ドキュメント遷移（pushState等）ではloadが来ないため安全弁で解除する
+    clearTimeout(loadingTimeout);
+    loadingTimeout = setTimeout(() => {
+      pageLoading = false;
+    }, 5000);
+    void sendNavState(true);
+  });
+
+  // 一覧からの除去はbrowser.ts側で済んでいる
+  tab.page.on("close", () => {
+    sendTabs();
+    if (getActiveTabId() !== shownTabId) void activateTab(undefined);
+  });
+}
+
 async function handleMsg(msg: ClientMsg): Promise<void> {
   const { page } = getActivePage();
   switch (msg.type) {
     case "hello": {
       send({ type: "helloAck", ver: 1, sessionId: randomUUID() });
       await setViewport(clampViewport(msg.viewportW, msg.viewportH, msg.dpr));
+      shownTabId = getActiveTabId();
       const wasLive = mode === "live";
       await switchMode("page"); // クライアント UI はページモードで始まるため揃える
+      sendTabs();
       await sendNavState(false);
       // ライブから戻した場合は switchMode 内でフル再送済み（二重 pageBegin を避ける）
       if (!wasLive) await captureAndSend(true);
@@ -415,6 +512,23 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
     case "reload":
       await page.reload({ timeout: 30_000 }).catch(() => {});
       break;
+    case "newTab": {
+      const previous = getActiveTab();
+      await openTab(msg.url);
+      await activateTab(previous);
+      break;
+    }
+    case "closeTab": {
+      await closeTab(msg.tabId);
+      sendTabs();
+      if (getActiveTabId() !== shownTabId) await activateTab(undefined);
+      break;
+    }
+    case "selectTab": {
+      const previous = getActiveTab();
+      if (selectTab(msg.tabId)) await activateTab(previous);
+      break;
+    }
     case "tap":
       await tap(msg.x, msg.y);
       // タップで入力欄にフォーカスしたか調べて IME 表示を制御する
@@ -488,42 +602,7 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  await startBrowser();
-  const { page, cdp } = getActivePage();
-
-  // ライブモード: Chrome へは即 Ack して生成を止めず、常に最新フレームだけを保持。
-  // クライアントへは liveAck が返ってくるまで次を送らない（1 枚ずつ、古いフレームは捨てる）
-  cdp.on("Page.screencastFrame", (params) => {
-    liveMetaScrollY = Math.round(params.metadata.scrollOffsetY);
-    latestLiveFrame = {
-      data: Buffer.from(params.data, "base64"),
-      scrollY: liveMetaScrollY,
-    };
-    void cdp.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {});
-    trySendLiveFrame();
-  });
-
-  page.on("load", () => {
-    pageLoading = false;
-    void sendNavState(false);
-    send({ type: "focus", kind: "none" }); // 新しいページにフォーカスは残らない
-    if (mode === "page") void captureAndSend(true);
-  });
-  let loadingTimeout: NodeJS.Timeout | undefined;
-  page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) {
-      pageLoading = true;
-      navGen++;
-      // リンクタップ等での遷移でも旧ページの未送信タイルを破棄する
-      current?.pending.clear();
-      // 同一ドキュメント遷移（pushState 等）では load が来ないため安全弁で解除する
-      clearTimeout(loadingTimeout);
-      loadingTimeout = setTimeout(() => {
-        pageLoading = false;
-      }, 5000);
-      void sendNavState(true);
-    }
-  });
+  await startBrowser(attachTab);
 
   const wss = new WebSocketServer({ port: PORT });
   wss.on("connection", (ws, req) => {

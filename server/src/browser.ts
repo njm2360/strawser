@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
 
@@ -29,23 +30,37 @@ export function clampViewport(width: number, height: number, dpr: number): Viewp
   };
 }
 
+// 背景タブは切り替え時に撮り直すので、表示中のタブだけ合わせればよい
 export async function setViewport(next: Viewport): Promise<void> {
   viewport = next;
-  await active?.page.setViewportSize({ width: next.width, height: next.height });
+  await getActiveTab().page.setViewportSize({ width: next.width, height: next.height });
 }
 
 // ログインセッション等を永続化するユーザーデータディレクトリ
 const USER_DATA_DIR = path.resolve(import.meta.dirname, "..", "user-data");
+
+export const NEW_TAB_URL = "about:blank";
 
 export interface ActivePage {
   page: Page;
   cdp: CDPSession;
 }
 
-let context: BrowserContext | undefined;
-let active: ActivePage | undefined;
+export interface Tab extends ActivePage {
+  id: string;
+  // クライアントへ出すタブ一覧用。page.title()は非同期なので遷移のたびに書き戻す
+  title: string;
+  url: string;
+}
 
-export async function startBrowser(): Promise<void> {
+let context: BrowserContext | undefined;
+const tabs: Tab[] = [];
+let activeId = "";
+// 生成経路（初期タブ・クライアント要求・target=_blank）によらず同じハンドラを張らせる
+let onTabOpened: (tab: Tab) => void = () => {};
+
+export async function startBrowser(tabOpened: (tab: Tab) => void): Promise<void> {
+  onTabOpened = tabOpened;
   context = await chromium.launchPersistentContext(USER_DATA_DIR, {
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: DEVICE_SCALE,
@@ -56,18 +71,92 @@ export async function startBrowser(): Promise<void> {
       "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
     locale: "ja-JP",
   });
-  const page = context.pages()[0] ?? (await context.newPage());
-  const cdp = await context.newCDPSession(page);
-  active = { page, cdp };
+  // target=_blankやwindow.openで開いたページもタブとして拾う
+  context.on("page", (page) => void register(page));
+  const first = context.pages()[0];
+  if (first) await register(first);
+  else await openTab();
+}
+
+// openTabとcontextのpageイベントが同じページに対して同時に走る。
+// CDPセッション取得を待つ間に重複登録しないよう、進行中の登録を掴んでおく
+const registering = new Map<Page, Promise<Tab>>();
+
+function register(page: Page): Promise<Tab> {
+  const existing = tabs.find((t) => t.page === page);
+  if (existing) return Promise.resolve(existing);
+  const inflight = registering.get(page);
+  if (inflight) return inflight;
+  const started = (async () => {
+    const cdp = await context!.newCDPSession(page);
+    const tab: Tab = { id: randomUUID(), page, cdp, title: "", url: page.url() };
+    tabs.push(tab);
+    // ページ自身が閉じた場合（window.close等）も一覧から外す
+    page.once("close", () => drop(tab.id));
+    if (!activeId) activeId = tab.id;
+    onTabOpened(tab);
+    return tab;
+  })().finally(() => registering.delete(page));
+  registering.set(page, started);
+  return started;
+}
+
+function drop(id: string): void {
+  const index = tabs.findIndex((t) => t.id === id);
+  if (index < 0) return;
+  tabs.splice(index, 1);
+  if (activeId !== id) return;
+  // 閉じたタブの隣を選ぶ
+  activeId = tabs[Math.min(index, tabs.length - 1)]?.id ?? "";
+}
+
+export function getTabs(): readonly Tab[] {
+  return tabs;
+}
+
+export function getActiveTabId(): string {
+  return activeId;
+}
+
+export function getActiveTab(): Tab {
+  const tab = tabs.find((t) => t.id === activeId);
+  if (!tab) throw new Error("browser not started");
+  return tab;
 }
 
 export function getActivePage(): ActivePage {
-  if (!active) throw new Error("browser not started");
-  return active;
+  return getActiveTab();
+}
+
+export function selectTab(id: string): boolean {
+  if (id === activeId || !tabs.some((t) => t.id === id)) return false;
+  activeId = id;
+  return true;
+}
+
+export async function openTab(url: string = NEW_TAB_URL): Promise<Tab> {
+  const page = await context!.newPage();
+  const tab = await register(page);
+  activeId = tab.id;
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  if (url !== NEW_TAB_URL) await page.goto(url, { timeout: 30_000 }).catch(() => {});
+  return tab;
+}
+
+// タブ0枚の状態を作らないので、最後の1枚は新規タブへ差し替える
+export async function closeTab(id: string): Promise<void> {
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) return;
+  if (tabs.length === 1) {
+    await openTab();
+  }
+  await tab.page.close().catch(() => {});
+  drop(id);
 }
 
 export async function stopBrowser(): Promise<void> {
-  active = undefined;
+  tabs.length = 0;
+  activeId = "";
   await context?.close().catch(() => {});
   context = undefined;
 }

@@ -4,9 +4,11 @@ import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -18,13 +20,20 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,6 +63,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.net.ClientMsg
 import com.njm2360.strawser.net.ServerMsg
@@ -105,6 +115,9 @@ fun BrowserScreen(
     var liveScrollY by remember { mutableStateOf(0) }
     var liveWidth by remember { mutableStateOf(0) }
     var showInput by remember { mutableStateOf(false) }
+    var tabs by remember { mutableStateOf<List<ServerMsg.TabInfo>>(emptyList()) }
+    var activeTabId by remember { mutableStateOf("") }
+    var showTabs by remember { mutableStateOf(false) }
 
     val density = LocalDensity.current.density
     val configuration = LocalConfiguration.current
@@ -150,6 +163,10 @@ fun BrowserScreen(
                         // 新しい遷移が始まったら前回のエラー表示を消す
                         if (msg.loading) errorText = null
                     }
+                    is ServerMsg.Tabs -> {
+                        tabs = msg.tabs
+                        activeTabId = msg.activeId
+                    }
                     is ServerMsg.Focus -> showInput = msg.kind == "text"
                     is ServerMsg.Error -> errorText = msg.message
                     else -> {}
@@ -175,7 +192,7 @@ fun BrowserScreen(
             },
             onConnectionChange = { connected = it },
             onAuthError = onAuthError,
-            onSuperseded = { errorText = "別の接続に切り替わりました。⚙ から接続し直してください" },
+            onSuperseded = { errorText = "別の接続に切り替わりました。メニューの接続設定から繋ぎ直してください" },
         )
     }
     DisposableEffect(client) {
@@ -184,8 +201,12 @@ fun BrowserScreen(
     }
 
     val keyboardController = LocalSoftwareKeyboardController.current
-    BackHandler(enabled = showInput || (connected && navState?.canGoBack == true)) {
-        if (showInput) {
+    BackHandler(
+        enabled = showTabs || showInput || (connected && navState?.canGoBack == true),
+    ) {
+        if (showTabs) {
+            showTabs = false
+        } else if (showInput) {
             keyboardController?.hide()
             showInput = false
         } else {
@@ -197,68 +218,89 @@ fun BrowserScreen(
         if (connected) client.send(currentViewport)
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .imePadding()
             .onSizeChanged { contentWidthPx = it.width },
     ) {
-        UrlBar(
-            urlInput = urlInput,
-            onUrlChange = { urlInput = it },
-            navState = navState,
-            connected = connected,
-            liveMode = liveMode,
-            onOpenSettings = onOpenSettings,
-            onNavigate = { client.send(ClientMsg.Navigate(it)) },
-            onBack = { client.send(ClientMsg.Back) },
-            onForward = { client.send(ClientMsg.Forward) },
-            onReload = { client.send(ClientMsg.Reload) },
-            onToggleLive = {
-                liveMode = !liveMode
-                if (liveMode) liveFrame = null
-                client.send(ClientMsg.SetMode(if (liveMode) "live" else "page"))
-            },
-        )
-        if (navState?.loading == true) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
-        errorText?.let {
-            Text(
-                text = it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 8.dp),
+        Column(modifier = Modifier.fillMaxSize()) {
+            UrlBar(
+                urlInput = urlInput,
+                onUrlChange = { urlInput = it },
+                navState = navState,
+                connected = connected,
+                liveMode = liveMode,
+                tabCount = tabs.size,
+                onOpenSettings = onOpenSettings,
+                onNavigate = { client.send(ClientMsg.Navigate(it)) },
+                onShowTabs = { showTabs = true },
+                onNewTab = { client.send(ClientMsg.NewTab()) },
+                onBack = { client.send(ClientMsg.Back) },
+                onForward = { client.send(ClientMsg.Forward) },
+                onReload = { client.send(ClientMsg.Reload) },
+                onToggleLive = {
+                    liveMode = !liveMode
+                    if (liveMode) liveFrame = null
+                    client.send(ClientMsg.SetMode(if (liveMode) "live" else "page"))
+                },
             )
+            if (navState?.loading == true) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            errorText?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            }
+            if (liveMode) {
+                LiveView(
+                    frame = liveFrame,
+                    pageWidth = liveWidth,
+                    serverScrollY = liveScrollY,
+                    onTap = { x, y -> client.send(ClientMsg.Tap(x, y)) },
+                    onScrollTo = { y -> client.send(ClientMsg.ScrollPos(y)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            } else {
+                RemotePageView(
+                    page = page,
+                    onTap = { x, y -> client.send(ClientMsg.Tap(x, y)) },
+                    onLongPress = { x, y -> client.send(ClientMsg.LongPress(x, y)) },
+                    onScrollPos = { y -> client.send(ClientMsg.ScrollPos(y)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            }
+            if (showInput) {
+                InputOverlay(
+                    onInsert = { client.send(ClientMsg.InsertText(it)) },
+                    onEnter = { client.send(ClientMsg.Key("Enter")) },
+                    onBackspace = { client.send(ClientMsg.Key("Backspace")) },
+                    onClose = { showInput = false },
+                )
+            }
         }
-        if (liveMode) {
-            LiveView(
-                frame = liveFrame,
-                pageWidth = liveWidth,
-                serverScrollY = liveScrollY,
-                onTap = { x, y -> client.send(ClientMsg.Tap(x, y)) },
-                onScrollTo = { y -> client.send(ClientMsg.ScrollPos(y)) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-            )
-        } else {
-            RemotePageView(
-                page = page,
-                onTap = { x, y -> client.send(ClientMsg.Tap(x, y)) },
-                onLongPress = { x, y -> client.send(ClientMsg.LongPress(x, y)) },
-                onScrollPos = { y -> client.send(ClientMsg.ScrollPos(y)) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-            )
-        }
-        if (showInput) {
-            InputOverlay(
-                onInsert = { client.send(ClientMsg.InsertText(it)) },
-                onEnter = { client.send(ClientMsg.Key("Enter")) },
-                onBackspace = { client.send(ClientMsg.Key("Backspace")) },
-                onClose = { showInput = false },
+        if (showTabs) {
+            TabListOverlay(
+                tabs = tabs,
+                activeTabId = activeTabId,
+                onSelect = {
+                    client.send(ClientMsg.SelectTab(it))
+                    showTabs = false
+                },
+                onCloseTab = { client.send(ClientMsg.CloseTab(it)) },
+                onNewTab = {
+                    client.send(ClientMsg.NewTab())
+                    showTabs = false
+                },
+                onDismiss = { showTabs = false },
             )
         }
     }
@@ -288,14 +330,41 @@ private fun BarButton(
 }
 
 @Composable
+private fun TabCountButton(count: Int, onClick: () -> Unit) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick),
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(22.dp)
+                .border(2.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(5.dp)),
+        ) {
+            Text(
+                text = if (count > 99) "∞" else count.toString(),
+                color = MaterialTheme.colorScheme.outline,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+@Composable
 private fun UrlBar(
     urlInput: String,
     onUrlChange: (String) -> Unit,
     navState: ServerMsg.NavState?,
     connected: Boolean,
     liveMode: Boolean,
+    tabCount: Int,
     onOpenSettings: () -> Unit,
     onNavigate: (String) -> Unit,
+    onShowTabs: () -> Unit,
+    onNewTab: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
@@ -304,15 +373,13 @@ private fun UrlBar(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val urlFocusRequester = remember { FocusRequester() }
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp),
     ) {
-        BarButton("←", onBack, enabled = navState?.canGoBack == true)
-        BarButton("→", onForward, enabled = navState?.canGoForward == true)
-        BarButton("⟳", onReload, enabled = connected)
         OutlinedTextField(
             value = urlInput,
             onValueChange = onUrlChange,
@@ -324,6 +391,16 @@ private fun UrlBar(
                 focusManager.clearFocus()
                 keyboardController?.hide()
             }),
+            leadingIcon = {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(
+                            color = if (connected) Color(0xFF4CAF50) else Color(0xFFF44336),
+                            shape = CircleShape,
+                        ),
+                )
+            },
             trailingIcon = {
                 if (urlInput.isNotEmpty()) {
                     // クリア後そのまま打てるようにフォーカスも与える
@@ -338,24 +415,118 @@ private fun UrlBar(
                 .weight(1f)
                 .focusRequester(urlFocusRequester),
         )
-        // 動画やアニメーションはタイル配信では追えないのでスクリーンキャストへ切り替える
-        BarButton(
-            label = "LIVE",
-            onClick = onToggleLive,
-            enabled = connected,
-            color = if (liveMode) Color(0xFFF44336) else MaterialTheme.colorScheme.outline,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        BarButton("⚙", onOpenSettings)
-        Box(
-            modifier = Modifier
-                .padding(8.dp)
-                .size(10.dp)
-                .background(
-                    color = if (connected) Color(0xFF4CAF50) else Color(0xFFF44336),
-                    shape = MaterialTheme.shapes.small,
-                ),
-        )
+        TabCountButton(count = tabCount, onClick = onShowTabs)
+        Box {
+            BarButton("⋮", { menuOpen = true })
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
+                    BarButton("←", { menuOpen = false; onBack() }, navState?.canGoBack == true)
+                    BarButton("→", { menuOpen = false; onForward() }, navState?.canGoForward == true)
+                    BarButton("⟳", { menuOpen = false; onReload() }, connected)
+                }
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("新しいタブ") },
+                    onClick = { menuOpen = false; onNewTab() },
+                )
+                DropdownMenuItem(
+                    text = { Text("タブ一覧（$tabCount）") },
+                    onClick = { menuOpen = false; onShowTabs() },
+                )
+                // 動画やアニメーションはタイル配信では追えないのでスクリーンキャストへ切り替える
+                DropdownMenuItem(
+                    text = { Text(if (liveMode) "LIVE表示をやめる" else "LIVE表示") },
+                    enabled = connected,
+                    onClick = { menuOpen = false; onToggleLive() },
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("接続設定") },
+                    onClick = { menuOpen = false; onOpenSettings() },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabListOverlay(
+    tabs: List<ServerMsg.TabInfo>,
+    activeTabId: String,
+    onSelect: (String) -> Unit,
+    onCloseTab: (String) -> Unit,
+    onNewTab: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+            ) {
+                Text(
+                    text = "タブ",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp),
+                )
+                BarButton("＋", onNewTab)
+                BarButton("✕", onDismiss)
+            }
+            HorizontalDivider()
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(tabs, key = { it.id }) { tab ->
+                    TabListRow(
+                        tab = tab,
+                        active = tab.id == activeTabId,
+                        onSelect = { onSelect(tab.id) },
+                        onClose = { onCloseTab(tab.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabListRow(
+    tab: ServerMsg.TabInfo,
+    active: Boolean,
+    onSelect: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val blank = tab.url.isBlank() || tab.url == "about:blank"
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (active) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+            )
+            .clickable(onClick = onSelect)
+            .padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = tab.title.ifBlank { "新しいタブ" },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (!blank) {
+                Text(
+                    text = decodeUrlForDisplay(tab.url),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        BarButton("✕", onClose, color = MaterialTheme.colorScheme.outline)
     }
 }
 

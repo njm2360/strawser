@@ -20,6 +20,9 @@ export type ClientMsg =
   | { type: "back" }
   | { type: "forward" }
   | { type: "reload" }
+  | { type: "newTab"; url?: string }
+  | { type: "closeTab"; tabId: string }
+  | { type: "selectTab"; tabId: string }
   | { type: "tap"; x: number; y: number }            // ページ座標（pageWidth基準）
   | { type: "longPress"; x: number; y: number }
   | { type: "scrollPos"; y: number }                  // ローカルスクロール位置通知（300ms スロットル）
@@ -46,4 +49,6 @@ export type ServerMsg =
       pageWidth: number }
   | { type: "focus"; kind: "text" | "none" }          // 入力欄フォーカス状態 → IME 表示制御
   | { type: "navState"; canGoBack: boolean; canGoForward: boolean; url: string; loading: boolean }
+  // タブの増減・並び・表示中タブ・タイトル更新のたびに一覧ごと送り直す
+  | { type: "tabs"; tabs: { id: string; title: string; url: string }[]; activeId: string }
   | { type: "error"; message: string };
