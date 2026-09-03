@@ -72,12 +72,14 @@ let pageLoading = false; // メインフレームのナビゲーション進行�
 let navGen = 0; // ナビゲーション世代。framenavigated ごとに増える（非同期処理の失効判定用）
 let mode: "page" | "live" = "page";
 
+// 画面の上端から下へ順に埋める。上へ戻る分は後回しでよいので距離を倍に見る
 function pickNextTile(page: CurrentPage): number {
-  const center = clientScrollY + getViewport().height / 2;
+  const top = clientScrollY;
   let best = -1;
   let bestDist = Infinity;
   for (const i of page.pending) {
-    const dist = Math.abs(i * page.tileHeight + page.tileHeight / 2 - center);
+    const tileTop = i * page.tileHeight;
+    const dist = tileTop >= top ? tileTop - top : (top - tileTop) * 2;
     if (dist < bestDist) {
       bestDist = dist;
       best = i;
@@ -99,17 +101,24 @@ async function pumpTiles(): Promise<void> {
       page.pending.delete(index);
       const tile = page.tiles[index];
       if (!tile) continue;
+      // pendingから外した後なので、失敗したタイルはrequestTilesで拾い直してもらう
+      const data = await tile.encode().catch((e) => {
+        console.error(`tile ${index} encode failed:`, e);
+        return undefined;
+      });
+      // 符号化を待つ間にページが差し替わっていたら送らない
+      if (!data || current !== page) continue;
       send({
         type: "tileHeader",
         pageId: page.pageId,
         tileIndex: index,
         offsetY: index * page.tileHeight,
         format: "webp",
-        byteLength: tile.data.byteLength,
+        byteLength: data.byteLength,
       });
-      console.log(`-> binary tile ${index} (${tile.data.byteLength} bytes)`);
+      console.log(`-> binary tile ${index} (${data.byteLength} bytes)`);
       // 送信完了（ソケットへのフラッシュ）を待ってから次のタイルを選ぶ
-      await new Promise<void>((resolve) => ws.send(tile.data, () => resolve()));
+      await new Promise<void>((resolve) => ws.send(data, () => resolve()));
     }
   } finally {
     pumping = false;
@@ -142,6 +151,8 @@ async function captureAndSend(forceNew: boolean): Promise<void> {
   } finally {
     capturing = false;
   }
+  // 新規ページは1画面ぶんしか撮っていないので、続きの先読みへ進める
+  void maybeExtend();
 }
 
 async function captureOnce(forceNew: boolean): Promise<void> {
@@ -149,14 +160,14 @@ async function captureOnce(forceNew: boolean): Promise<void> {
   while (extending) await new Promise((r) => setTimeout(r, 50));
   const { page } = getActivePage();
   const prev = current;
-  // 同一ページの差分再キャプチャは既にクライアントへ送った高さの範囲で行う
-  const cap = await captureFullPage(!forceNew && prev ? prev.fullHeight : undefined);
+  // 新規ページは1画面ぶん、同一ページの差分は既にクライアントへ送った高さぶん
+  const differential = !forceNew && prev !== undefined;
+  const cap = await captureFullPage(differential ? prev.fullHeight : undefined);
 
   // 同一ページの再キャプチャ（幅も高さもタイル数も不変）なら差分タイルだけ送る
   const view = getViewport();
   const isSamePage =
-    !forceNew &&
-    prev !== undefined &&
+    differential &&
     prev.pageWidth === view.width &&
     prev.tileHeight === getTileHeight() &&
     prev.fullHeight === cap.fullHeight &&
