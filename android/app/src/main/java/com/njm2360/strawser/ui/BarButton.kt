@@ -3,6 +3,7 @@ package com.njm2360.strawser.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,13 +26,13 @@ internal fun BarButton(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(40.dp)
-            .clip(MaterialTheme.shapes.small)
+            .clip(CircleShape)
             .clickable(enabled = enabled, onClick = onClick),
     ) {
         Text(
             text = label,
             color = if (enabled) color else MaterialTheme.colorScheme.outlineVariant,
-            style = style ?: MaterialTheme.typography.bodyLarge,
+            style = style ?: MaterialTheme.typography.titleLarge,
         )
     }
 }

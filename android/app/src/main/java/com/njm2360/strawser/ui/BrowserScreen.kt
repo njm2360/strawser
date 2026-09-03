@@ -28,10 +28,6 @@ import com.njm2360.strawser.net.ClientMsg
 import com.njm2360.strawser.resolveInput
 import kotlin.math.roundToInt
 
-// URLバーの高さ。ビューポート高さをIMEで変えるとサーバーが毎回撮り直すので、
-// 実測せず画面高さから引く
-private const val URL_BAR_DP = 56
-
 @Composable
 fun BrowserScreen(
     serverUrl: String,
@@ -49,7 +45,9 @@ fun BrowserScreen(
     } else {
         configuration.screenWidthDp
     }
-    val viewportH = (configuration.screenHeightDp - URL_BAR_DP).coerceAtLeast(320)
+    // ビューポート高さをIMEで変えるとサーバーが毎回撮り直すので、実測せず画面高さから引く
+    val viewportH = (configuration.screenHeightDp - URL_BAR_HEIGHT.value.roundToInt())
+        .coerceAtLeast(320)
     // helloは接続時に送られるので、そのときの最新値を読めるようにしておく
     val currentViewport by rememberUpdatedState(ClientMsg.Viewport(viewportW, viewportH, density))
 

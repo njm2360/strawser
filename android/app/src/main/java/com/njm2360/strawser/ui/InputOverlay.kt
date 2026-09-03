@@ -3,12 +3,6 @@ package com.njm2360.strawser.ui
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,40 +33,35 @@ internal fun InputOverlay(
     val keyboardController = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
+    fun flush() {
+        if (text.isNotEmpty()) {
+            onInsert(text)
+            text = ""
+        }
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        OutlinedTextField(
+        PillField(
             value = text,
             onValueChange = { text = it },
-            placeholder = { Text("リモート入力") },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = {
-                if (text.isNotEmpty()) {
-                    onInsert(text)
-                    text = ""
-                }
-            }),
-            textStyle = MaterialTheme.typography.bodySmall,
+            placeholder = "リモート入力",
+            imeAction = ImeAction.Send,
+            onAction = ::flush,
             modifier = Modifier
                 .weight(1f)
                 .focusRequester(focusRequester),
         )
         // 未送信テキストを送ってからEnter（検索実行など）
-        TextButton(onClick = {
-            if (text.isNotEmpty()) {
-                onInsert(text)
-                text = ""
-            }
-            onEnter()
-        }) { Text("⏎") }
-        TextButton(onClick = onBackspace) { Text("⌫") }
-        TextButton(onClick = {
+        BarButton("⏎", { flush(); onEnter() })
+        BarButton("⌫", onBackspace)
+        BarButton("✕", {
             keyboardController?.hide()
             onClose()
-        }) { Text("✕") }
+        })
     }
 }

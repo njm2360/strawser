@@ -37,14 +37,12 @@ internal fun TabListOverlay(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
                 Text(
                     text = "タブ",
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 12.dp),
+                    modifier = Modifier.weight(1f),
                 )
                 BarButton("＋", onNewTab)
                 BarButton("✕", onDismiss)
