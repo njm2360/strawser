@@ -1,6 +1,7 @@
 package com.njm2360.strawser.ui
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -153,6 +154,16 @@ fun BrowserScreen(
     DisposableEffect(client) {
         client.connect()
         onDispose { client.close() }
+    }
+
+    val keyboardController = LocalSoftwareKeyboardController.current
+    BackHandler(enabled = showInput || (connected && navState?.canGoBack == true)) {
+        if (showInput) {
+            keyboardController?.hide()
+            showInput = false
+        } else {
+            client.send(ClientMsg.Back)
+        }
     }
 
     Column(modifier = modifier.fillMaxSize().imePadding()) {
