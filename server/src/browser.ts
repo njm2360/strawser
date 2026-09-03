@@ -59,17 +59,47 @@ let activeId = "";
 // 生成経路（初期タブ・クライアント要求・target=_blank）によらず同じハンドラを張らせる
 let onTabOpened: (tab: Tab) => void = () => {};
 
+// UAを書き換えてもsec-ch-uaのbrandsは実バイナリのものが出る。
+// メジャーがずれると両者の矛盾がそのまま指紋になる
+async function mobileUserAgent(): Promise<string> {
+  const probe = await chromium.launch();
+  const major = probe.version().split(".")[0];
+  await probe.close();
+  return (
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
+    `(KHTML, like Gecko) Chrome/${major}.0.0.0 Mobile Safari/537.36`
+  );
+}
+
+// TZが指定されていればIntlがそれを返す。日本語WindowsではICUがローカライズされた
+// ゾーン名を引けずEtc/GMT-9のような固定オフセットに落ちるので、その値は使わない
+function systemTimezone(): string | undefined {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!tz.startsWith("Etc/")) return tz;
+  console.warn(`timezone resolved to ${tz}; set TZ to an IANA name such as Asia/Tokyo`);
+  return undefined;
+}
+
+// NodeはWindowsでLANGを見ない
+function systemLocale(): string {
+  const lang = process.env.LANG?.split(".")[0]?.replace("_", "-");
+  return lang || Intl.DateTimeFormat().resolvedOptions().locale;
+}
+
 export async function startBrowser(tabOpened: (tab: Tab) => void): Promise<void> {
   onTabOpened = tabOpened;
+  const timezoneId = systemTimezone();
   context = await chromium.launchPersistentContext(USER_DATA_DIR, {
+    // 既定のheadless shellはsec-ch-uaでHeadlessChromeを自己申告し、window.chromeも生えない
+    channel: "chromium",
+    args: ["--disable-blink-features=AutomationControlled"],
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: DEVICE_SCALE,
     isMobile: true,
     hasTouch: true,
-    userAgent:
-      "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-    locale: "ja-JP",
+    userAgent: await mobileUserAgent(),
+    locale: systemLocale(),
+    ...(timezoneId ? { timezoneId } : {}),
   });
   // target=_blankやwindow.openで開いたページもタブとして拾う
   context.on("page", (page) => void register(page));
