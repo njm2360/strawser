@@ -1,4 +1,4 @@
-import { getActivePage, PAGE_HEIGHT } from "./browser.ts";
+import { getActivePage, getViewport } from "./browser.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -7,9 +7,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // （pageExtend の遅延読み込みで実ページがスクロールしていることがある）
 async function toViewportY(pageY: number): Promise<number> {
   const { page } = getActivePage();
+  const viewportH = getViewport().height;
   let scrollY: number = await page.evaluate(() => window.scrollY);
-  if (pageY - scrollY < 0 || pageY - scrollY > PAGE_HEIGHT - 1) {
-    const target = Math.max(0, pageY - PAGE_HEIGHT / 2);
+  if (pageY - scrollY < 0 || pageY - scrollY > viewportH - 1) {
+    const target = Math.max(0, pageY - viewportH / 2);
     await page.evaluate((y) => window.scrollTo(0, y), target);
     await sleep(100);
     scrollY = await page.evaluate(() => window.scrollY);

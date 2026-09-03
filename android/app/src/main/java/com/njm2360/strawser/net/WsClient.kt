@@ -19,6 +19,7 @@ import kotlin.math.min
  */
 class WsClient(
     private val serverUrl: String,
+    private val viewport: () -> ClientMsg.Viewport,
     private val onMessage: (ServerMsg) -> Unit,
     private val onTile: (header: ServerMsg.TileHeader, bytes: ByteArray) -> Unit,
     private val onLiveFrame: (header: ServerMsg.LiveFrameHeader, bytes: ByteArray) -> Unit,
@@ -84,7 +85,8 @@ class WsClient(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             // TCP が開いただけでは「接続済み」にしない。
             // 認証拒否でも onOpen は来るため、helloAck 受信で初めて緑にする
-            send(ClientMsg.Hello(token = "", viewportW = 720, viewportH = 1280))
+            val v = viewport()
+            send(ClientMsg.Hello(token = "", viewportW = v.width, viewportH = v.height, dpr = v.dpr))
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {

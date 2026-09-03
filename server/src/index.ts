@@ -1,14 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
-import { startBrowser, stopBrowser, getActivePage, PAGE_HEIGHT } from "./browser.ts";
+import {
+  startBrowser,
+  stopBrowser,
+  getActivePage,
+  getViewport,
+  setViewport,
+  clampViewport,
+} from "./browser.ts";
 import {
   captureFullPage,
   captureRegion,
   measureContentHeight,
   triggerLazyLoad,
   tilesDiffer,
-  TILE_HEIGHT,
-  EXTEND_CHUNK,
+  getTileHeight,
+  getExtendChunk,
   type Tile,
 } from "./capture.ts";
 import { tap, longPress, insertText, pressKey } from "./input.ts";
@@ -41,6 +48,10 @@ function send(msg: ServerMsg): void {
 
 interface CurrentPage {
   pageId: string;
+  // 撮影時のビューポート幅とタイル高さ。途中で変わるとタイルindexの意味が壊れるので、
+  // ビューポート変更時はページごと作り直す
+  pageWidth: number;
+  tileHeight: number;
   fullHeight: number;    // クライアントに通知済みのキャプチャ高さ
   contentHeight: number; // 実ページ全体の高さ（fullHeight より大きければ未取得部分あり）
   tiles: Tile[];
@@ -55,11 +66,11 @@ let navGen = 0; // ナビゲーション世代。framenavigated ごとに増え�
 let mode: "page" | "live" = "page";
 
 function pickNextTile(page: CurrentPage): number {
-  const center = clientScrollY + PAGE_HEIGHT / 2;
+  const center = clientScrollY + getViewport().height / 2;
   let best = -1;
   let bestDist = Infinity;
   for (const i of page.pending) {
-    const dist = Math.abs(i * TILE_HEIGHT + TILE_HEIGHT / 2 - center);
+    const dist = Math.abs(i * page.tileHeight + page.tileHeight / 2 - center);
     if (dist < bestDist) {
       bestDist = dist;
       best = i;
@@ -85,7 +96,7 @@ async function pumpTiles(): Promise<void> {
         type: "tileHeader",
         pageId: page.pageId,
         tileIndex: index,
-        offsetY: index * TILE_HEIGHT,
+        offsetY: index * page.tileHeight,
         format: "webp",
         byteLength: tile.data.byteLength,
       });
@@ -134,10 +145,13 @@ async function captureOnce(forceNew: boolean): Promise<void> {
   // 同一ページの差分再キャプチャは既にクライアントへ送った高さの範囲で行う
   const cap = await captureFullPage(!forceNew && prev ? prev.fullHeight : undefined);
 
-  // 同一ページの再キャプチャ（高さもタイル数も不変）なら差分タイルだけ送る
+  // 同一ページの再キャプチャ（幅も高さもタイル数も不変）なら差分タイルだけ送る
+  const view = getViewport();
   const isSamePage =
     !forceNew &&
     prev !== undefined &&
+    prev.pageWidth === view.width &&
+    prev.tileHeight === getTileHeight() &&
     prev.fullHeight === cap.fullHeight &&
     prev.tiles.length === cap.tiles.length;
 
@@ -164,6 +178,8 @@ async function captureOnce(forceNew: boolean): Promise<void> {
   clientScrollY = 0;
   current = {
     pageId: randomUUID(),
+    pageWidth: view.width,
+    tileHeight: getTileHeight(),
     fullHeight: cap.fullHeight,
     contentHeight: cap.contentHeight,
     tiles: cap.tiles,
@@ -174,8 +190,9 @@ async function captureOnce(forceNew: boolean): Promise<void> {
     pageId: current.pageId,
     url: page.url(),
     title,
+    pageWidth: current.pageWidth,
     fullHeight: cap.fullHeight,
-    tileHeight: TILE_HEIGHT,
+    tileHeight: current.tileHeight,
     tileCount: cap.tiles.length,
   });
   void pumpTiles();
@@ -193,8 +210,10 @@ async function maybeExtend(): Promise<void> {
   if (pageLoading) return;
   // ライブモード中はタイル更新を止める
   if (mode !== "page") return;
+  // ビューポートが変わっていたらタイルの刻みが合わない
+  if (page.pageWidth !== getViewport().width || page.tileHeight !== getTileHeight()) return;
   // 画像末尾から 1.5 画面分以上手前なら何もしない
-  if (clientScrollY + PAGE_HEIGHT * 1.5 < page.fullHeight) return;
+  if (clientScrollY + getViewport().height * 1.5 < page.fullHeight) return;
   // 末尾まで取得済みのページ（静的ページ or 無限スクロールが伸びる前）では
   // 実ページスクロール + 再測定が空振りし続けるので、確認頻度を 1.5 秒に 1 回へ抑える
   if (page.fullHeight >= page.contentHeight) {
@@ -217,9 +236,9 @@ async function maybeExtend(): Promise<void> {
 
     // 末尾が部分タイルの場合（無限スクロールでページが後から伸びた場合）は
     // そのタイルごと取り直して境界を TILE_HEIGHT に揃える
-    const baseIndex = Math.floor(page.fullHeight / TILE_HEIGHT);
-    const baseY = baseIndex * TILE_HEIGHT;
-    const newFullHeight = Math.min(contentHeight, baseY + EXTEND_CHUNK);
+    const baseIndex = Math.floor(page.fullHeight / page.tileHeight);
+    const baseY = baseIndex * page.tileHeight;
+    const newFullHeight = Math.min(contentHeight, baseY + getExtendChunk());
     await triggerLazyLoad(page.fullHeight, newFullHeight);
     const newTiles = await captureRegion(baseY, newFullHeight);
     if (current !== page || pageLoading || gen !== navGen) return;
@@ -263,33 +282,40 @@ function trySendLiveFrame(): void {
     format: "jpeg",
     byteLength: frame.data.byteLength,
     scrollY: frame.scrollY,
+    pageWidth: getViewport().width,
   });
   client.send(frame.data);
 }
 
+async function startScreencast(): Promise<void> {
+  const { page, cdp } = getActivePage();
+  const view = getViewport();
+  liveFrameInFlight = false;
+  latestLiveFrame = undefined;
+  await cdp.send("Page.startScreencast", {
+    format: "jpeg",
+    quality: 40,
+    maxWidth: Math.round(view.width * view.scale),
+    maxHeight: Math.round(view.height * view.scale),
+    everyNthFrame: 2,
+  });
+  // 静止ページでは最初のフレームが来ないことがあるため、強制的に再描画させる
+  // （即時往復だとコンポジタに拾われる前に相殺されるので1フレーム分待つ）
+  await page
+    .evaluate(async () => {
+      window.scrollBy(0, 1);
+      await new Promise((r) => setTimeout(r, 60));
+      window.scrollBy(0, -1);
+    })
+    .catch(() => {});
+}
+
 async function switchMode(next: "page" | "live"): Promise<void> {
   if (next === mode) return;
-  const { page, cdp } = getActivePage();
+  const { cdp } = getActivePage();
   mode = next;
   if (next === "live") {
-    liveFrameInFlight = false;
-    latestLiveFrame = undefined;
-    await cdp.send("Page.startScreencast", {
-      format: "jpeg",
-      quality: 40,
-      maxWidth: 720,
-      maxHeight: 1280,
-      everyNthFrame: 2,
-    });
-    // 静止ページでは最初のフレームが来ないことがあるため、強制的に再描画させる
-    // （即時往復だとコンポジタに拾われる前に相殺されるので 1 フレーム分待つ）
-    await page
-      .evaluate(async () => {
-        window.scrollBy(0, 1);
-        await new Promise((r) => setTimeout(r, 60));
-        window.scrollBy(0, -1);
-      })
-      .catch(() => {});
+    await startScreencast();
   } else {
     await cdp.send("Page.stopScreencast").catch(() => {});
     latestLiveFrame = undefined;
@@ -345,11 +371,29 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
   switch (msg.type) {
     case "hello": {
       send({ type: "helloAck", ver: 1, sessionId: randomUUID() });
+      await setViewport(clampViewport(msg.viewportW, msg.viewportH, msg.dpr));
       const wasLive = mode === "live";
       await switchMode("page"); // クライアント UI はページモードで始まるため揃える
       await sendNavState(false);
       // ライブから戻した場合は switchMode 内でフル再送済み（二重 pageBegin を避ける）
       if (!wasLive) await captureAndSend(true);
+      break;
+    }
+    case "viewport": {
+      const next = clampViewport(msg.width, msg.height, msg.dpr);
+      const cur = getViewport();
+      if (next.width === cur.width && next.height === cur.height && next.scale === cur.scale) {
+        break;
+      }
+      await setViewport(next);
+      // 幅が変わればレイアウトごと変わるので差分にはできない
+      if (mode === "live") {
+        const { cdp } = getActivePage();
+        await cdp.send("Page.stopScreencast").catch(() => {});
+        await startScreencast();
+      } else {
+        await captureAndSend(true);
+      }
       break;
     }
     case "navigate": {

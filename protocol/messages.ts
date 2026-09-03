@@ -4,16 +4,23 @@
 //
 // テキストフレームは JSON。バイナリフレームは直前のヘッダメッセージ
 // （screenshotHeader / tileHeader / liveFrameHeader）に対応する画像データ。
-// 座標系はサーバー側エミュレーション幅 720px（CSS px）を基準にする。
+//
+// 座標系はサーバー側エミュレーション幅（CSS px）が基準。クライアントの表示幅dpをそのまま
+// 採用するので1 CSS px = 1 dpになる。幅は回転で変わるのでpageBegin/liveFrameHeaderの
+// pageWidthで毎回渡す。
 
 // ---- クライアント → サーバー ----
 export type ClientMsg =
-  | { type: "hello"; ver: 1; token: string; viewportW: number; viewportH: number }
+  // viewportW/Hはdp、dprは端末の表示密度。サーバーはこれをエミュレーション幅と転送解像度に
+  // 反映する（dprはサーバー側の上限で切り詰められる）
+  | { type: "hello"; ver: 1; token: string; viewportW: number; viewportH: number; dpr: number }
+  // 画面回転などによる表示領域の変更
+  | { type: "viewport"; width: number; height: number; dpr: number }
   | { type: "navigate"; url: string }
   | { type: "back" }
   | { type: "forward" }
   | { type: "reload" }
-  | { type: "tap"; x: number; y: number }            // ページ座標（720px 基準）
+  | { type: "tap"; x: number; y: number }            // ページ座標（pageWidth基準）
   | { type: "longPress"; x: number; y: number }
   | { type: "scrollPos"; y: number }                  // ローカルスクロール位置通知（300ms スロットル）
   | { type: "insertText"; text: string }              // IME 確定文字列
@@ -25,16 +32,18 @@ export type ClientMsg =
 // ---- サーバー → クライアント ----
 export type ServerMsg =
   | { type: "helloAck"; ver: 1; sessionId: string }
-  // 直後のバイナリフレームが本体。width/height はページ座標（720px 基準の CSS px）
+  // 直後のバイナリフレームが本体。width/heightはページ座標（CSS px）
   | { type: "screenshotHeader"; format: "webp"; width: number; height: number; byteLength: number }
-  | { type: "pageBegin"; pageId: string; url: string; title: string;
-      fullHeight: number; tileHeight: 2048; tileCount: number }
+  // pageWidthはこのページのタイルを撮ったエミュレーション幅。以降の座標はすべてこれが基準
+  | { type: "pageBegin"; pageId: string; url: string; title: string; pageWidth: number;
+      fullHeight: number; tileHeight: number; tileCount: number }
   | { type: "tileHeader"; pageId: string; tileIndex: number; offsetY: number;
       format: "webp"; byteLength: number }
   | { type: "pageExtend"; pageId: string; newFullHeight: number; addedTiles: number }
   // scrollY: フレーム時点の実ページのスクロール位置（ページ座標）。
   // ライブ中のタップ座標変換とクライアント側スクロール量の基準に使う
-  | { type: "liveFrameHeader"; format: "jpeg"; byteLength: number; scrollY: number }
+  | { type: "liveFrameHeader"; format: "jpeg"; byteLength: number; scrollY: number;
+      pageWidth: number }
   | { type: "focus"; kind: "text" | "none" }          // 入力欄フォーカス状態 → IME 表示制御
   | { type: "navState"; canGoBack: boolean; canGoForward: boolean; url: string; loading: boolean }
   | { type: "error"; message: string };

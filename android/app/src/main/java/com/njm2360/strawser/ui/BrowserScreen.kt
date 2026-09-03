@@ -47,6 +47,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -59,9 +61,11 @@ import com.njm2360.strawser.net.WsClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 import kotlin.math.min
+import kotlin.math.roundToInt
 
-// サーバー側エミュレーション幅（ページ座標の基準）
-private const val PAGE_WIDTH = 720f
+// URLバーの高さ。ビューポート高さをIMEで変えるとサーバーが毎回撮り直すので、
+// 実測せず画面高さから引く
+private const val URL_BAR_DP = 56
 
 // URL バー表示用: %E6%97%A5... のパーセントエンコードを読める形に戻す
 // （+ は URLDecoder が空白にしてしまうため一旦退避する）
@@ -74,6 +78,7 @@ private fun decodeUrlForDisplay(url: String): String = try {
 /** 1 ページ分のタイル群。tiles は届いた分だけ埋まる。pageExtend で末尾に伸びる */
 private class RemotePage(
     val pageId: String,
+    val pageWidth: Int,
     val tileHeight: Int,
     fullHeight: Int,
     tileCount: Int,
@@ -98,11 +103,25 @@ fun BrowserScreen(
     var liveMode by remember { mutableStateOf(false) }
     var liveFrame by remember { mutableStateOf<ImageBitmap?>(null) }
     var liveScrollY by remember { mutableStateOf(0) }
+    var liveWidth by remember { mutableStateOf(0) }
     var showInput by remember { mutableStateOf(false) }
+
+    val density = LocalDensity.current.density
+    val configuration = LocalConfiguration.current
+    var contentWidthPx by remember { mutableStateOf(0) }
+    val viewportW = if (contentWidthPx > 0) {
+        (contentWidthPx / density).roundToInt()
+    } else {
+        configuration.screenWidthDp
+    }
+    val viewportH = (configuration.screenHeightDp - URL_BAR_DP).coerceAtLeast(320)
+    // helloは接続時に送られるので、そのときの最新値を読めるようにしておく
+    val currentViewport by rememberUpdatedState(ClientMsg.Viewport(viewportW, viewportH, density))
 
     val client = remember(serverUrl) {
         WsClient(
             serverUrl = serverUrl,
+            viewport = { currentViewport },
             onMessage = { msg ->
                 when (msg) {
                     is ServerMsg.HelloAck -> {
@@ -111,7 +130,13 @@ fun BrowserScreen(
                         showInput = false
                     }
                     is ServerMsg.PageBegin -> {
-                        page = RemotePage(msg.pageId, msg.tileHeight, msg.fullHeight, msg.tileCount)
+                        page = RemotePage(
+                            pageId = msg.pageId,
+                            pageWidth = msg.pageWidth,
+                            tileHeight = msg.tileHeight,
+                            fullHeight = msg.fullHeight,
+                            tileCount = msg.tileCount,
+                        )
                     }
                     is ServerMsg.PageExtend -> {
                         page?.takeIf { it.pageId == msg.pageId }?.let {
@@ -145,6 +170,7 @@ fun BrowserScreen(
                 if (bmp != null) {
                     liveFrame = bmp.asImageBitmap()
                     liveScrollY = header.scrollY
+                    liveWidth = header.pageWidth
                 }
             },
             onConnectionChange = { connected = it },
@@ -167,7 +193,16 @@ fun BrowserScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().imePadding()) {
+    LaunchedEffect(connected, currentViewport) {
+        if (connected) client.send(currentViewport)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .imePadding()
+            .onSizeChanged { contentWidthPx = it.width },
+    ) {
         UrlBar(
             urlInput = urlInput,
             onUrlChange = { urlInput = it },
@@ -199,6 +234,7 @@ fun BrowserScreen(
         if (liveMode) {
             LiveView(
                 frame = liveFrame,
+                pageWidth = liveWidth,
                 serverScrollY = liveScrollY,
                 onTap = { x, y -> client.send(ClientMsg.Tap(x, y)) },
                 onScrollTo = { y -> client.send(ClientMsg.ScrollPos(y)) },
@@ -330,12 +366,14 @@ private fun UrlBar(
 @Composable
 private fun LiveView(
     frame: ImageBitmap?,
+    pageWidth: Int,
     serverScrollY: Int,
     onTap: (x: Double, y: Double) -> Unit,
     onScrollTo: (y: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val curScrollY by rememberUpdatedState(serverScrollY)
+    val curPageWidth by rememberUpdatedState(pageWidth)
     var dragAccumPage by remember { mutableStateOf(0f) } // 未送信の縦ドラッグ量（ページ座標）
 
     LaunchedEffect(Unit) {
@@ -353,7 +391,7 @@ private fun LiveView(
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { offset ->
                     // ライブフレームはビューポートのみなので実ページの scrollY を足してページ座標へ
-                    val scale = PAGE_WIDTH / size.width
+                    val scale = curPageWidth.toFloat() / size.width
                     onTap(
                         (offset.x * scale).toDouble(),
                         (curScrollY + offset.y * scale).toDouble(),
@@ -363,7 +401,7 @@ private fun LiveView(
             .pointerInput(Unit) {
                 detectVerticalDragGestures { change, dragAmount ->
                     change.consume()
-                    val scale = PAGE_WIDTH / size.width
+                    val scale = curPageWidth.toFloat() / size.width
                     dragAccumPage -= dragAmount * scale // 指を上へ = ページを下へ
                 }
             },
@@ -455,7 +493,7 @@ private fun RemotePageView(
     }
     BoxWithConstraints(modifier = modifier) {
         val widthPx = constraints.maxWidth.toFloat()
-        val scale = widthPx / PAGE_WIDTH // 表示 px / ページ px
+        val scale = widthPx / page.pageWidth // 表示px / ページpx
         val density = LocalDensity.current
         val listState = rememberLazyListState()
 
@@ -487,8 +525,8 @@ private fun RemotePageView(
                         .fillMaxWidth()
                         .height(tileHeightDp)
                         .pointerInput(page.pageId, index) {
-                            // 表示座標 → 720px 基準ページ座標（タイル offsetY を足す）
-                            val toPage = { v: Float -> v * PAGE_WIDTH / size.width }
+                            // 表示座標→pageWidth基準のページ座標（タイルoffsetYを足す）
+                            val toPage = { v: Float -> v * page.pageWidth / size.width }
                             detectTapGestures(
                                 onTap = { offset ->
                                     onTap(

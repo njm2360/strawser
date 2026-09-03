@@ -5,7 +5,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 // /protocol/messages.ts の転記。変更時は両方を更新すること。
-// 座標系はサーバー側エミュレーション幅 720px 基準。
+// 座標系はサーバー側エミュレーション幅（=こちらの表示幅dp）が基準。
+// 基準値はpageBegin/liveFrameHeaderのpageWidthで毎回渡される。
 
 val protocolJson = Json {
     classDiscriminator = "type"
@@ -16,6 +17,7 @@ val protocolJson = Json {
 // ---- クライアント → サーバー ----
 @Serializable
 sealed interface ClientMsg {
+    // viewportW/Hはdp。サーバーはこの幅でエミュレートするので1 CSS px = 1 dpになる
     @Serializable
     @SerialName("hello")
     data class Hello(
@@ -23,6 +25,16 @@ sealed interface ClientMsg {
         val token: String,
         val viewportW: Int,
         val viewportH: Int,
+        val dpr: Float,
+    ) : ClientMsg
+
+    // 画面回転などで表示領域が変わったとき
+    @Serializable
+    @SerialName("viewport")
+    data class Viewport(
+        val width: Int,
+        val height: Int,
+        val dpr: Float,
     ) : ClientMsg
 
     @Serializable
@@ -95,13 +107,14 @@ sealed interface ServerMsg {
         val byteLength: Int,
     ) : ServerMsg
 
-    // 以後このページのタイルが届く
+    // 以後このページのタイルが届く。pageWidthが以降の座標の基準
     @Serializable
     @SerialName("pageBegin")
     data class PageBegin(
         val pageId: String,
         val url: String,
         val title: String,
+        val pageWidth: Int,
         val fullHeight: Int,
         val tileHeight: Int,
         val tileCount: Int,
@@ -144,6 +157,7 @@ sealed interface ServerMsg {
         val format: String,
         val byteLength: Int,
         val scrollY: Int,
+        val pageWidth: Int,
     ) : ServerMsg
 
     @Serializable
