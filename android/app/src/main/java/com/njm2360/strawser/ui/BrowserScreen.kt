@@ -6,6 +6,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -40,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,11 +56,17 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -651,6 +664,38 @@ private fun InputOverlay(
     }
 }
 
+// ローカルズームの倍率。1.0でエミュレーション幅が表示幅にちょうど収まる。
+// 上限より上はタイルを引き伸ばすだけになる
+private const val MIN_ZOOM = 1f
+private const val MAX_ZOOM = 4f
+
+/**
+ * 二本指のときだけピンチを拾う。一本指のイベントは消費せずLazyColumnの縦スクロールへ流す。
+ * 二本目が触れた後は最後の指が離れるまで消費し続ける（途中でLazyColumnに奪われると飛ぶ）
+ */
+private suspend fun PointerInputScope.detectPinch(
+    onPinch: (centroid: Offset, zoomChange: Float, panChange: Offset) -> Unit,
+) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        var pinching = false
+        do {
+            // LazyColumnはMainパスで判定するので、その前に消費しないと縦に流れる
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.changes.count { it.pressed } >= 2) pinching = true
+            if (pinching) {
+                // 直前も接地していた指が1本も無いフレーム（同時タッチダウンなど）では
+                // centroidがUnspecifiedになる。NaNを倍率と横位置に流すと以後戻せない
+                val centroid = event.calculateCentroid()
+                if (centroid.isSpecified) {
+                    onPinch(centroid, event.calculateZoom(), event.calculatePan())
+                }
+                event.changes.forEach { it.consume() }
+            }
+        } while (event.changes.any { it.pressed })
+    }
+}
+
 @Composable
 private fun RemotePageView(
     page: RemotePage?,
@@ -665,10 +710,16 @@ private fun RemotePageView(
         }
         return
     }
-    BoxWithConstraints(modifier = modifier) {
-        val widthPx = constraints.maxWidth.toFloat()
-        val scale = widthPx / page.pageWidth // 表示px / ページpx
+    BoxWithConstraints(modifier = modifier.clipToBounds()) {
         val density = LocalDensity.current
+        val viewportPx = constraints.maxWidth.toFloat()
+        var zoom by remember(page.pageId) { mutableFloatStateOf(MIN_ZOOM) }
+        var panPx by remember(page.pageId) { mutableFloatStateOf(0f) } // 常に0以下
+        val contentWidth = with(density) { (viewportPx * zoom).toDp() }
+        val scale = viewportPx * zoom / page.pageWidth // 表示px / ページpx
+        // タイル高さ・タップ座標・scrollPosはすべてこのscale経由。ピンチのたびに貼り直さず
+        // 最新値を読めるよう、pointerInputとsnapshotFlowからはこちらを見る
+        val curScale by rememberUpdatedState(scale)
         val listState = rememberLazyListState()
 
         // 新しいページが始まったら先頭へ戻す（scrollPos も 0 に通知され、tile 0 が最優先で届く）
@@ -677,10 +728,10 @@ private fun RemotePageView(
         }
 
         // ローカルスクロール位置をページ座標でサーバーへ通知（300ms スロットル）
-        LaunchedEffect(page.pageId, scale) {
+        LaunchedEffect(page.pageId) {
             snapshotFlow {
                 listState.firstVisibleItemIndex * page.tileHeight +
-                    (listState.firstVisibleItemScrollOffset / scale).toInt()
+                    (listState.firstVisibleItemScrollOffset / curScale).toInt()
             }
                 .conflate()
                 .collect { y ->
@@ -689,47 +740,72 @@ private fun RemotePageView(
                 }
         }
 
-        LazyColumn(state = listState) {
-            items(count = page.tileCount, key = { it }) { index ->
-                val tilePageHeight = min(page.tileHeight, page.fullHeight - index * page.tileHeight)
-                val tileHeightDp = with(density) { (tilePageHeight * scale).toDp() }
-                val bitmap = page.tiles[index]
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(tileHeightDp)
-                        .pointerInput(page.pageId, index) {
-                            // 表示座標→pageWidth基準のページ座標（タイルoffsetYを足す）
-                            val toPage = { v: Float -> v * page.pageWidth / size.width }
-                            detectTapGestures(
-                                onTap = { offset ->
-                                    onTap(
-                                        toPage(offset.x).toDouble(),
-                                        (index * page.tileHeight + toPage(offset.y)).toDouble(),
-                                    )
-                                },
-                                onLongPress = { offset ->
-                                    onLongPress(
-                                        toPage(offset.x).toDouble(),
-                                        (index * page.tileHeight + toPage(offset.y)).toDouble(),
-                                    )
-                                },
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(page.pageId, viewportPx) {
+                    detectPinch { centroid, zoomChange, panChange ->
+                        val newZoom = (zoom * zoomChange).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                        // ピンチ中心の下にあるページ上の点を動かさない
+                        val anchor = (centroid.x - panPx) / zoom
+                        zoom = newZoom
+                        panPx = (centroid.x - anchor * newZoom + panChange.x)
+                            .coerceIn(-viewportPx * (newZoom - 1f), 0f)
+                    }
+                },
+        ) {
+            // 列を実寸幅で置いてtranslationXでずらす。LazyColumnの横方向のクリップは
+            // 自分の幅までなので、はみ出す幅を持たせないとタイルが切れる
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .requiredWidth(contentWidth)
+                    .graphicsLayer { translationX = panPx },
+            ) {
+                items(count = page.tileCount, key = { it }) { index ->
+                    val tilePageHeight =
+                        min(page.tileHeight, page.fullHeight - index * page.tileHeight)
+                    val tileHeightDp = with(density) { (tilePageHeight * scale).toDp() }
+                    val bitmap = page.tiles[index]
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(tileHeightDp)
+                            .pointerInput(page.pageId, index) {
+                                // 表示座標→pageWidth基準のページ座標（タイルoffsetYを足す）。
+                                // 横位置はtranslationXの分がポインタ座標から引かれた後なので
+                                // ここで掛けるのは倍率だけ
+                                val toPage = { v: Float -> v / curScale }
+                                detectTapGestures(
+                                    onTap = { offset ->
+                                        onTap(
+                                            toPage(offset.x).toDouble(),
+                                            (index * page.tileHeight + toPage(offset.y)).toDouble(),
+                                        )
+                                    },
+                                    onLongPress = { offset ->
+                                        onLongPress(
+                                            toPage(offset.x).toDouble(),
+                                            (index * page.tileHeight + toPage(offset.y)).toDouble(),
+                                        )
+                                    },
+                                )
+                            },
+                    ) {
+                        if (bitmap != null) {
+                            Image(
+                                bitmap = bitmap,
+                                contentDescription = null,
+                                contentScale = ContentScale.FillWidth,
+                                modifier = Modifier.fillMaxWidth(),
                             )
-                        },
-                ) {
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap,
-                            contentDescription = null,
-                            contentScale = ContentScale.FillWidth,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color(0xFFE0E0E0)),
-                        )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0xFFE0E0E0)),
+                            )
+                        }
                     }
                 }
             }
