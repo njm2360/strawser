@@ -55,6 +55,7 @@ private fun AppRoot(modifier: Modifier = Modifier) {
             key(connectGeneration, settings.connectUrl()) {
                 BrowserScreen(
                     serverUrl = settings.connectUrl(),
+                    searchEngine = settings.searchEngine,
                     onOpenSettings = {
                         settingsError = null
                         showSettings = true
@@ -74,10 +75,12 @@ private fun AppRoot(modifier: Modifier = Modifier) {
                 initial = settings,
                 errorText = settingsError,
                 onDismiss = { showSettings = false },
-                onSave = {
-                    it.save(prefs)
-                    settings = it
-                    connectGeneration++
+                onSave = { saved ->
+                    saved.save(prefs)
+                    val searchEngineOnly = saved.connectUrl() == settings.connectUrl() &&
+                        saved.searchEngine != settings.searchEngine
+                    settings = saved
+                    if (!searchEngineOnly) connectGeneration++
                     settingsError = null
                     showSettings = false
                 },

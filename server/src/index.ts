@@ -494,11 +494,10 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       break;
     }
     case "navigate": {
-      const url = /^[a-z]+:\/\//i.test(msg.url) ? msg.url : `https://${msg.url}`;
       // 旧ページの未送信タイルは即座に破棄して帯域を新ページに譲る
       current?.pending.clear();
       await sendNavState(true);
-      await page.goto(url, { waitUntil: "load", timeout: 30_000 }).catch((e) => {
+      await page.goto(msg.url, { waitUntil: "load", timeout: 30_000 }).catch((e) => {
         send({ type: "error", message: stripAnsi(`navigate failed: ${String(e)}`) });
       });
       break;

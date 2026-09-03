@@ -65,9 +65,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.njm2360.strawser.SearchEngine
 import com.njm2360.strawser.net.ClientMsg
 import com.njm2360.strawser.net.ServerMsg
 import com.njm2360.strawser.net.WsClient
+import com.njm2360.strawser.resolveInput
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 import kotlin.math.min
@@ -101,6 +103,7 @@ private class RemotePage(
 @Composable
 fun BrowserScreen(
     serverUrl: String,
+    searchEngine: SearchEngine,
     onOpenSettings: () -> Unit,
     onAuthError: () -> Unit,
     modifier: Modifier = Modifier,
@@ -233,7 +236,7 @@ fun BrowserScreen(
                 liveMode = liveMode,
                 tabCount = tabs.size,
                 onOpenSettings = onOpenSettings,
-                onNavigate = { client.send(ClientMsg.Navigate(it)) },
+                onNavigate = { client.send(ClientMsg.Navigate(resolveInput(it, searchEngine))) },
                 onShowTabs = { showTabs = true },
                 onNewTab = { client.send(ClientMsg.NewTab()) },
                 onBack = { client.send(ClientMsg.Back) },

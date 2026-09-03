@@ -16,6 +16,7 @@ export type ClientMsg =
   | { type: "hello"; ver: 1; token: string; viewportW: number; viewportH: number; dpr: number }
   // 画面回転などによる表示領域の変更
   | { type: "viewport"; width: number; height: number; dpr: number }
+  // 絶対URL。URLか検索語かの振り分けと検索エンジンはクライアントが持つ
   | { type: "navigate"; url: string }
   | { type: "back" }
   | { type: "forward" }
