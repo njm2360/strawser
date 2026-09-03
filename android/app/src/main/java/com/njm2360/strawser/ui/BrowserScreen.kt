@@ -81,10 +81,13 @@ import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.SearchEngine
 import com.njm2360.strawser.net.ClientMsg
 import com.njm2360.strawser.net.ServerMsg
+import com.njm2360.strawser.net.TileStore
 import com.njm2360.strawser.net.WsClient
 import com.njm2360.strawser.resolveInput
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.withContext
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -100,23 +103,28 @@ private fun decodeUrlForDisplay(url: String): String = try {
     url
 }
 
-/** 1 ページ分のタイル群。tiles は届いた分だけ埋まる。pageExtend で末尾に伸びる */
+/**
+ * 1ページ分のタイル群。hashesは届いた分だけ埋まる。pageExtendで末尾に伸びる。
+ * 絵の実体はTileStoreがhashで持っているので、ここが抱えるのは索引だけ
+ */
 private class RemotePage(
     val pageId: String,
     val pageWidth: Int,
     val tileHeight: Int,
+    val scrollY: Int,
     fullHeight: Int,
     tileCount: Int,
 ) {
     var fullHeight by mutableStateOf(fullHeight)
     var tileCount by mutableStateOf(tileCount)
-    val tiles = mutableStateMapOf<Int, ImageBitmap>()
+    val hashes = mutableStateMapOf<Int, String>()
 }
 
 @Composable
 fun BrowserScreen(
     serverUrl: String,
     searchEngine: SearchEngine,
+    tileCacheBytes: Int,
     onOpenSettings: () -> Unit,
     onAuthError: () -> Unit,
     modifier: Modifier = Modifier,
@@ -147,14 +155,18 @@ fun BrowserScreen(
     // helloは接続時に送られるので、そのときの最新値を読めるようにしておく
     val currentViewport by rememberUpdatedState(ClientMsg.Viewport(viewportW, viewportH, density))
 
-    val client = remember(serverUrl) {
+    // 接続を張り直してもタイルは持ち越す
+    val tiles = remember(tileCacheBytes) { TileStore(tileCacheBytes) }
+
+    val client = remember(serverUrl, tiles) {
         WsClient(
             serverUrl = serverUrl,
+            tiles = tiles,
             viewport = { currentViewport },
             onMessage = { msg ->
                 when (msg) {
                     is ServerMsg.HelloAck -> {
-                        // 再接続時はサーバーがページモードへ戻すので UI 状態も揃える
+                        // 再接続時はサーバーがページモードへ戻すのでUI状態も揃える
                         liveMode = false
                         showInput = false
                     }
@@ -163,9 +175,15 @@ fun BrowserScreen(
                             pageId = msg.pageId,
                             pageWidth = msg.pageWidth,
                             tileHeight = msg.tileHeight,
+                            scrollY = msg.scrollY,
                             fullHeight = msg.fullHeight,
                             tileCount = msg.tileCount,
-                        )
+                        ).also { restored ->
+                            // 手元にあるタイルはそのまま出す（戻る・進む・タブ切替）
+                            msg.hashes.forEachIndexed { index, hash ->
+                                if (hash != null) restored.hashes[index] = hash
+                            }
+                        }
                     }
                     is ServerMsg.PageExtend -> {
                         page?.takeIf { it.pageId == msg.pageId }?.let {
@@ -188,15 +206,9 @@ fun BrowserScreen(
                     else -> {}
                 }
             },
-            onTile = { pageId, tileIndex, bytes ->
+            onTile = { pageId, tileIndex, hash ->
                 val target = page ?: return@WsClient
-                if (target.pageId != pageId) return@WsClient
-                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                if (bmp != null) {
-                    target.tiles[tileIndex] = bmp.asImageBitmap()
-                } else {
-                    android.util.Log.w("BrowserScreen", "tile decode failed (${bytes.size} bytes)")
-                }
+                if (target.pageId == pageId) target.hashes[tileIndex] = hash
             },
             onLiveFrame = { header, bytes ->
                 val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
@@ -278,7 +290,7 @@ fun BrowserScreen(
                     pageWidth = liveWidth,
                     serverScrollY = liveScrollY,
                     onTap = { x, y -> client.send(ClientMsg.Tap(x, y)) },
-                    onScrollTo = { y -> client.send(ClientMsg.ScrollPos(y)) },
+                    onScrollTo = { y -> client.send(ClientMsg.ScrollPos("", y)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
@@ -286,9 +298,11 @@ fun BrowserScreen(
             } else {
                 RemotePageView(
                     page = page,
+                    tiles = tiles,
                     onTap = { x, y -> client.send(ClientMsg.Tap(x, y)) },
                     onLongPress = { x, y -> client.send(ClientMsg.LongPress(x, y)) },
-                    onScrollPos = { y -> client.send(ClientMsg.ScrollPos(y)) },
+                    onScrollPos = { pageId, y -> client.send(ClientMsg.ScrollPos(pageId, y)) },
+                    onRequestTile = { index -> client.send(ClientMsg.RequestTiles(listOf(index))) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
@@ -696,12 +710,32 @@ private suspend fun PointerInputScope.detectPinch(
     }
 }
 
+/** 一度掴んだImageBitmapは表示している間離さない。LruCacheから落ちても絵が消えないように */
+@Composable
+private fun rememberTileBitmap(
+    tiles: TileStore,
+    hash: String?,
+    onMissing: () -> Unit,
+): ImageBitmap? {
+    var bitmap by remember(hash) { mutableStateOf(hash?.let { tiles.peek(it) }) }
+    val missing by rememberUpdatedState(onMissing)
+    LaunchedEffect(hash) {
+        if (hash == null || bitmap != null) return@LaunchedEffect
+        val decoded = withContext(Dispatchers.Default) { tiles.bitmap(hash) }
+        // バイト列がキャッシュから落ちていたら要求し直す
+        if (decoded == null) missing() else bitmap = decoded
+    }
+    return bitmap
+}
+
 @Composable
 private fun RemotePageView(
     page: RemotePage?,
+    tiles: TileStore,
     onTap: (x: Double, y: Double) -> Unit,
     onLongPress: (x: Double, y: Double) -> Unit,
-    onScrollPos: (y: Int) -> Unit,
+    onScrollPos: (pageId: String, y: Int) -> Unit,
+    onRequestTile: (index: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (page == null) {
@@ -722,20 +756,21 @@ private fun RemotePageView(
         val curScale by rememberUpdatedState(scale)
         val listState = rememberLazyListState()
 
-        // 新しいページが始まったら先頭へ戻す（scrollPos も 0 に通知され、tile 0 が最優先で届く）
-        LaunchedEffect(page.pageId) {
-            listState.scrollToItem(0)
-        }
-
-        // ローカルスクロール位置をページ座標でサーバーへ通知（300ms スロットル）
-        LaunchedEffect(page.pageId) {
+        // 表示位置を合わせてから通知を始める。新しいページは先頭、戻る・進む・タブ切替では
+        // 離れたときの位置。通知が先に出るとサーバーが覚えている位置を0で潰してしまう
+        LaunchedEffect(page) {
+            listState.scrollToItem(
+                index = page.scrollY / page.tileHeight,
+                scrollOffset = ((page.scrollY % page.tileHeight) * scale).roundToInt(),
+            )
+            // ローカルスクロール位置をページ座標でサーバーへ通知（300msスロットル）
             snapshotFlow {
                 listState.firstVisibleItemIndex * page.tileHeight +
                     (listState.firstVisibleItemScrollOffset / curScale).toInt()
             }
                 .conflate()
                 .collect { y ->
-                    onScrollPos(y)
+                    onScrollPos(page.pageId, y)
                     delay(300)
                 }
         }
@@ -766,7 +801,9 @@ private fun RemotePageView(
                     val tilePageHeight =
                         min(page.tileHeight, page.fullHeight - index * page.tileHeight)
                     val tileHeightDp = with(density) { (tilePageHeight * scale).toDp() }
-                    val bitmap = page.tiles[index]
+                    val bitmap = rememberTileBitmap(tiles, page.hashes[index]) {
+                        onRequestTile(index)
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()

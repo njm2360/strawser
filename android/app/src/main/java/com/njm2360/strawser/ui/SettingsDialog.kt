@@ -38,6 +38,8 @@ fun SettingsDialog(
     var engineName by rememberSaveable { mutableStateOf(initial.searchEngine.name) }
     var engineMenuOpen by remember { mutableStateOf(false) }
     val searchEngine = SearchEngine.of(engineName)
+    var tileCacheMb by rememberSaveable { mutableStateOf(initial.tileCacheMb) }
+    var cacheMenuOpen by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -87,11 +89,40 @@ fun SettingsDialog(
                         }
                     }
                 }
+                Box {
+                    OutlinedButton(
+                        onClick = { cacheMenuOpen = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("タイルキャッシュ: ${tileCacheMb}MB")
+                    }
+                    DropdownMenu(
+                        expanded = cacheMenuOpen,
+                        onDismissRequest = { cacheMenuOpen = false },
+                    ) {
+                        Settings.TILE_CACHE_CHOICES.forEach { mb ->
+                            DropdownMenuItem(
+                                text = { Text("${mb}MB") },
+                                onClick = {
+                                    tileCacheMb = mb
+                                    cacheMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = "溜めておくほど、戻る・進む・タブ切替でタイルを受け直さずに済みます",
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(Settings(serverUrl.trim(), token.trim(), searchEngine)) },
+                onClick = {
+                    onSave(Settings(serverUrl.trim(), token.trim(), searchEngine, tileCacheMb))
+                },
                 enabled = serverUrl.isNotBlank() && token.isNotBlank(),
             ) { Text("保存して接続") }
         },

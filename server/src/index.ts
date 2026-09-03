@@ -14,6 +14,7 @@ import {
   openTab,
   closeTab,
   type Tab,
+  type Viewport,
 } from "./browser.ts";
 import {
   captureFullPage,
@@ -23,6 +24,7 @@ import {
   tilesDiffer,
   getTileHeight,
   getExtendChunk,
+  type FullPageCapture,
   type Tile,
 } from "./capture.ts";
 import { tap, longPress, insertText, pressKey } from "./input.ts";
@@ -55,43 +57,79 @@ function send(msg: ServerMsg): void {
 
 interface CurrentPage {
   pageId: string;
+  // 履歴エントリ単位の識別子（tabId:entryId）。戻る・進む・タブ切替で同じ状態へ戻す鍵
+  viewKey: string;
   // 撮影時のビューポート幅とタイル高さ。途中で変わるとタイルindexの意味が壊れるので、
-  // ビューポート変更時はページごと作り直す
+  // 合わなくなったページは作り直す
   pageWidth: number;
   tileHeight: number;
   fullHeight: number;    // クライアントに通知済みのキャプチャ高さ
-  contentHeight: number; // 実ページ全体の高さ（fullHeight より大きければ未取得部分あり）
+  contentHeight: number; // 実ページ全体の高さ（fullHeightより大きければ未取得部分あり）
   tiles: Tile[];
-  pending: Set<number>; // 未送信 or 更新されたタイル index
+  // 送信済みタイルのhash。undefinedはまだクライアントへ届いていない
+  hashes: (string | undefined)[];
+  scrollY: number;      // クライアントのローカルスクロール位置（ページ座標）
+  pending: Set<number>; // まだ送っていない、または更新されたタイルのindex
   // tileRefが外れてクライアントから要求し直されたindex。実体を送る
   forceRaw: Set<number>;
 }
 
-// クライアントが持っているとみなすタイルのバイト列（新しい順）。
-// tileRefで済ませるかどうかの判断に使う。クライアント側のキャッシュはこれより
-// 大きく取ってあるが、食い違ってもrequestTilesで要求され直すだけで済む
-const SENT_HASH_LIMIT = 400;
-const sentHashes = new Set<string>();
+// クライアントのタイルキャッシュの写し。hashからバイト数で、挿入順がLRU。
+// helloで渡された容量に合わせて同じ順に捨てる。復号のためのアクセスまでは追えないので
+// 完全一致はしないが、食い違ってもrequestTilesで実体を要求され直すだけで済む
+const clientTiles = new Map<string, number>();
+let clientCacheId = "";
+let clientCacheLimit = 16 * 1024 * 1024;
+let clientCacheUsed = 0;
 
-function rememberHash(hash: string): void {
-  sentHashes.delete(hash); // 再挿入して最近使った順にする
-  sentHashes.add(hash);
-  for (const old of sentHashes) {
-    if (sentHashes.size <= SENT_HASH_LIMIT) break;
-    sentHashes.delete(old);
+function rememberHash(hash: string, byteLength: number): void {
+  const prev = clientTiles.get(hash);
+  if (prev !== undefined) {
+    clientTiles.delete(hash); // 再挿入して最近使った順にする
+    clientCacheUsed -= prev;
+  }
+  clientTiles.set(hash, byteLength);
+  clientCacheUsed += byteLength;
+  for (const [old, size] of clientTiles) {
+    if (clientCacheUsed <= clientCacheLimit) break;
+    clientTiles.delete(old);
+    clientCacheUsed -= size;
   }
 }
 
+// 履歴エントリ単位のページ状態。戻る・進む・タブ切替を撮り直しにしないために持つ。
+// 1ページあたりタイルの署名とWebPバイト列で数百KB
+const PAGE_CACHE_LIMIT = 30;
+const pages = new Map<string, CurrentPage>(); // 挿入順がLRU
+
 let current: CurrentPage | undefined;
-let clientScrollY = 0; // クライアントのローカルスクロール位置（ページ座標）
 let pumping = false;
 let pageLoading = false; // メインフレームのナビゲーション進行中か
 let navGen = 0; // ナビゲーション世代。framenavigated ごとに増える（非同期処理の失効判定用）
 let mode: "page" | "live" = "page";
 
+// 表示から外れたページは未符号化タイルが元PNGを掴んだままなので手放させる。
+// 戻ってきたときは差分キャプチャで撮り直して埋める
+function setCurrent(next: CurrentPage | undefined): void {
+  if (current && current !== next) {
+    current.pending.clear();
+    for (const tile of current.tiles) tile.drop();
+  }
+  current = next;
+}
+
+function cachePage(page: CurrentPage): void {
+  pages.delete(page.viewKey); // 再挿入して最近使った順にする
+  pages.set(page.viewKey, page);
+  for (const [key, old] of pages) {
+    if (pages.size <= PAGE_CACHE_LIMIT) break;
+    if (old !== current) pages.delete(key);
+  }
+}
+
 // 画面の上端から下へ順に埋める。上へ戻る分は後回しでよいので距離を倍に見る
 function pickNextTile(page: CurrentPage): number {
-  const top = clientScrollY;
+  const top = page.scrollY;
   let best = -1;
   let bestDist = Infinity;
   for (const i of page.pending) {
@@ -127,8 +165,9 @@ async function pumpTiles(): Promise<void> {
       if (!encoded || current !== page) continue;
       const { data, hash } = encoded;
       const offsetY = index * page.tileHeight;
-      const raw = page.forceRaw.delete(index) || !sentHashes.has(hash);
-      rememberHash(hash);
+      const raw = page.forceRaw.delete(index) || !clientTiles.has(hash);
+      rememberHash(hash, data.byteLength);
+      page.hashes[index] = hash;
       if (!raw) {
         send({ type: "tileRef", pageId: page.pageId, tileIndex: index, offsetY, hash });
         continue;
@@ -155,22 +194,17 @@ async function pumpTiles(): Promise<void> {
 
 let capturing = false;
 let capturePending = false;
-let capturePendingForceNew = false;
 
-async function captureAndSend(forceNew: boolean): Promise<void> {
+async function captureAndSend(): Promise<void> {
   if (capturing) {
     capturePending = true;
-    capturePendingForceNew ||= forceNew;
     return;
   }
   capturing = true;
   try {
-    let force = forceNew;
     do {
       capturePending = false;
-      capturePendingForceNew = false;
-      await captureOnce(force);
-      force = capturePendingForceNew;
+      await captureOnce();
     } while (capturePending);
   } catch (e) {
     console.error("capture failed:", e);
@@ -181,64 +215,150 @@ async function captureAndSend(forceNew: boolean): Promise<void> {
   void maybeExtend();
 }
 
-async function captureOnce(forceNew: boolean): Promise<void> {
-  // pageExtend 進行中は fullHeight が動くので終わるまで待つ
-  while (extending) await new Promise((r) => setTimeout(r, 50));
-  const { page } = getActivePage();
-  const prev = current;
-  // 新規ページは1画面ぶん、同一ページの差分は既にクライアントへ送った高さぶん
-  const differential = !forceNew && prev !== undefined;
-  const cap = await captureFullPage(differential ? prev.fullHeight : undefined);
+// 履歴エントリごとに1つ。戻る・進むでは同じ鍵に戻ってくる
+async function viewKey(tab: Tab): Promise<string> {
+  const hist = await tab.cdp.send("Page.getNavigationHistory").catch(() => undefined);
+  return `${tab.id}:${hist?.entries[hist.currentIndex]?.id ?? 0}`;
+}
 
-  // 同一ページの再キャプチャ（幅も高さもタイル数も不変）なら差分タイルだけ送る
+// 差分キャプチャの基準にできるページか。タイルの刻みが合わなければindexの意味が変わる
+function reusable(page: CurrentPage | undefined, key: string): CurrentPage | undefined {
   const view = getViewport();
-  const isSamePage =
-    differential &&
-    prev.pageWidth === view.width &&
-    prev.tileHeight === getTileHeight() &&
-    prev.fullHeight === cap.fullHeight &&
-    prev.tiles.length === cap.tiles.length;
+  return page &&
+    page.viewKey === key &&
+    page.pageWidth === view.width &&
+    page.tileHeight === getTileHeight()
+    ? page
+    : undefined;
+}
 
-  if (isSamePage) {
-    prev.contentHeight = cap.contentHeight;
-    let changed = 0;
-    for (let i = 0; i < cap.tiles.length; i++) {
-      const next = cap.tiles[i];
-      const before = prev.tiles[i];
-      if (next && before && tilesDiffer(next, before)) {
-        prev.tiles[i] = next;
-        prev.pending.add(i);
-        changed++;
-      }
-    }
-    console.log(`recapture: ${changed}/${cap.tiles.length} tiles changed`);
-    if (changed > 0) void pumpTiles();
+async function captureOnce(): Promise<void> {
+  const gen = navGen;
+  const tab = getActiveTab();
+  const key = await viewKey(tab);
+  // 戻る・進む・タブ切替。前に撮った状態が残っていればキャプチャを待たせずに出す
+  if (current?.viewKey !== key) restore(pages.get(key), tab);
+  // pageExtend進行中はfullHeightが動くので終わるまで待つ
+  while (extending) await new Promise((r) => setTimeout(r, 50));
+
+  const base = reusable(current, key);
+  // 差分は既にクライアントへ送った高さぶん、新規ページは1画面ぶん
+  const cap = await captureFullPage(base?.fullHeight);
+  // 撮っている間に遷移していたら写っているのは次のページで、取り込むと前のページの
+  // 状態が潰れる。撮り直しは遷移先のloadに任せ、currentも外して継ぎ足しを止める
+  if (gen !== navGen) {
+    console.log(`capture dropped: navigated away from ${key}`);
+    setCurrent(undefined);
     return;
   }
+  const view = getViewport();
+  if (
+    base &&
+    current === base &&
+    reusable(base, key) &&
+    base.fullHeight === cap.fullHeight &&
+    base.tiles.length === cap.tiles.length
+  ) {
+    applyDiff(base, cap);
+    return;
+  }
+  await beginPage(tab, key, cap, view);
+}
 
-  const title = await page.title().catch(() => "");
-  // 新しいページはクライアント側で先頭表示になるため、
-  // 前ページの古いスクロール位置で送信順を決めない（tile 0 を最優先にする）
-  clientScrollY = 0;
-  current = {
+// 前に撮ったページをそのまま出す。クライアントが持っているはずのタイルはhashだけ渡し、
+// 届いていない分はpendingへ積む（直後の差分キャプチャで撮り直されて送られる）
+function restore(page: CurrentPage | undefined, tab: Tab): void {
+  const cached = page && reusable(page, page.viewKey);
+  if (!cached) return;
+  setCurrent(cached);
+  cachePage(cached);
+  cached.pageId = randomUUID();
+  cached.pending.clear();
+  cached.forceRaw.clear();
+  const hashes = cached.tiles.map((_, i) => {
+    const hash = cached.hashes[i];
+    const size = hash !== undefined ? clientTiles.get(hash) : undefined;
+    if (hash !== undefined && size !== undefined) {
+      rememberHash(hash, size); // クライアント側でも参照されるので同じ順に並べ直す
+      return hash;
+    }
+    cached.pending.add(i);
+    return null;
+  });
+  console.log(
+    `restore ${cached.viewKey}: ${cached.tiles.length - cached.pending.size}/` +
+      `${cached.tiles.length} tiles kept, scrollY=${cached.scrollY}`,
+  );
+  send({
+    type: "pageBegin",
+    pageId: cached.pageId,
+    url: tab.page.url(),
+    title: tab.title,
+    pageWidth: cached.pageWidth,
+    fullHeight: cached.fullHeight,
+    tileHeight: cached.tileHeight,
+    tileCount: cached.tiles.length,
+    scrollY: cached.scrollY,
+    hashes,
+  });
+}
+
+// 同じ形のまま撮り直したとき。変わったタイルと、まだ届いていないタイルだけ送る
+function applyDiff(page: CurrentPage, cap: FullPageCapture): void {
+  page.contentHeight = cap.contentHeight;
+  let changed = 0;
+  for (let i = 0; i < cap.tiles.length; i++) {
+    const next = cap.tiles[i];
+    if (!next) continue;
+    const before = page.tiles[i];
+    // 未送信のタイルは中身を見ずに差し替える。復帰したページは元PNGを手放していて
+    // 符号化できないので、ここで撮り直したものに入れ替わる必要がある
+    if (before && !page.pending.has(i) && !tilesDiffer(next, before)) continue;
+    page.tiles[i] = next;
+    page.hashes[i] = undefined;
+    page.pending.add(i);
+    changed++;
+  }
+  console.log(`recapture: ${changed}/${cap.tiles.length} tiles changed`);
+  if (changed > 0) void pumpTiles();
+}
+
+async function beginPage(
+  tab: Tab,
+  key: string,
+  cap: FullPageCapture,
+  view: Viewport,
+): Promise<void> {
+  const title = await tab.page.title().catch(() => "");
+  const page: CurrentPage = {
     pageId: randomUUID(),
+    viewKey: key,
     pageWidth: view.width,
     tileHeight: getTileHeight(),
     fullHeight: cap.fullHeight,
     contentHeight: cap.contentHeight,
     tiles: cap.tiles,
+    hashes: [],
+    // 同じ履歴エントリを撮り直したのなら表示位置は動かさない。
+    // 新しいページは先頭から（tile 0を最優先にする）
+    scrollY: pages.get(key)?.scrollY ?? 0,
     pending: new Set(cap.tiles.map((_, i) => i)),
     forceRaw: new Set(),
   };
+  setCurrent(page);
+  cachePage(page);
+  console.log(`begin ${key}: ${cap.tiles.length} tiles, scrollY=${page.scrollY}`);
   send({
     type: "pageBegin",
-    pageId: current.pageId,
-    url: page.url(),
+    pageId: page.pageId,
+    url: tab.page.url(),
     title,
-    pageWidth: current.pageWidth,
-    fullHeight: cap.fullHeight,
-    tileHeight: current.tileHeight,
+    pageWidth: page.pageWidth,
+    fullHeight: page.fullHeight,
+    tileHeight: page.tileHeight,
     tileCount: cap.tiles.length,
+    scrollY: page.scrollY,
+    hashes: cap.tiles.map(() => null),
   });
   void pumpTiles();
 }
@@ -258,7 +378,7 @@ async function maybeExtend(): Promise<void> {
   // ビューポートが変わっていたらタイルの刻みが合わない
   if (page.pageWidth !== getViewport().width || page.tileHeight !== getTileHeight()) return;
   // 画像末尾から 1.5 画面分以上手前なら何もしない
-  if (clientScrollY + getViewport().height * 1.5 < page.fullHeight) return;
+  if (page.scrollY + getViewport().height * 1.5 < page.fullHeight) return;
   // 末尾まで取得済みのページ（静的ページ or 無限スクロールが伸びる前）では
   // 実ページスクロール + 再測定が空振りし続けるので、確認頻度を 1.5 秒に 1 回へ抑える
   if (page.fullHeight >= page.contentHeight) {
@@ -269,9 +389,13 @@ async function maybeExtend(): Promise<void> {
   extending = true;
   const gen = navGen;
   try {
-    const { page: pw } = getActivePage();
+    const tab = getActiveTab();
+    // ブラウザが既に別のページへ移っていることがある（loadが来ないまま
+    // pageLoadingの安全弁が外れた後など）。継ぎ足す先が違えば次のページの絵が付く
+    if (page.viewKey !== (await viewKey(tab))) return;
+    const pw = tab.page;
     // 実ページを該当位置までスクロールして遅延読み込み・無限スクロールを発火させる
-    await pw.evaluate((y) => window.scrollTo(0, y), clientScrollY).catch(() => {});
+    await pw.evaluate((y) => window.scrollTo(0, y), page.scrollY).catch(() => {});
     await pw.waitForTimeout(300);
     const contentHeight = Math.max(await measureContentHeight(), page.fullHeight);
     // 待機中にナビゲーションが起きていたら旧ページへの継ぎ足しになるため中止
@@ -287,9 +411,11 @@ async function maybeExtend(): Promise<void> {
     await triggerLazyLoad(page.fullHeight, newFullHeight);
     const newTiles = await captureRegion(baseY, newFullHeight);
     if (current !== page || pageLoading || gen !== navGen) return;
+    if (page.viewKey !== (await viewKey(tab))) return;
 
     const oldCount = page.tiles.length;
     page.tiles.splice(baseIndex, oldCount - baseIndex, ...newTiles);
+    page.hashes.length = baseIndex; // 撮り直した末尾のhashは無効
     for (let i = baseIndex; i < page.tiles.length; i++) page.pending.add(i);
     page.fullHeight = newFullHeight;
     send({
@@ -364,8 +490,7 @@ async function switchMode(next: "page" | "live"): Promise<void> {
   } else {
     await cdp.send("Page.stopScreencast").catch(() => {});
     latestLiveFrame = undefined;
-    // ページモード復帰時は最新状態をフルで送り直す
-    void captureAndSend(true);
+    void captureAndSend();
   }
 }
 
@@ -430,8 +555,7 @@ async function activateTab(previous: Tab | undefined): Promise<void> {
     await previous.cdp.send("Page.stopScreencast").catch(() => {});
   }
   shownTabId = getActiveTabId();
-  current = undefined;
-  clientScrollY = 0;
+  setCurrent(undefined);
   pageLoading = false;
   navGen++;
   const view = getViewport();
@@ -441,7 +565,7 @@ async function activateTab(previous: Tab | undefined): Promise<void> {
   sendTabs();
   await sendNavState(false);
   if (mode === "live") await startScreencast();
-  else await captureAndSend(true);
+  else await captureAndSend();
 }
 
 function attachTab(tab: Tab): void {
@@ -471,7 +595,7 @@ function attachTab(tab: Tab): void {
     pageLoading = false;
     void sendNavState(false);
     send({ type: "focus", kind: "none" }); // 新しいページにフォーカスは残らない
-    if (mode === "page") void captureAndSend(true);
+    if (mode === "page") void captureAndSend();
   });
 
   let loadingTimeout: NodeJS.Timeout | undefined;
@@ -484,16 +608,21 @@ function attachTab(tab: Tab): void {
     navGen++;
     // リンクタップ等での遷移でも旧ページの未送信タイルを破棄する
     current?.pending.clear();
-    // 同一ドキュメント遷移（pushState等）ではloadが来ないため安全弁で解除する
+    // 同一ドキュメント遷移（pushState等）ではloadが来ないため安全弁で解除する。
+    // このままでは誰も撮り直さないので、ここで撮り直す
     clearTimeout(loadingTimeout);
     loadingTimeout = setTimeout(() => {
       pageLoading = false;
+      if (mode === "page") void captureAndSend();
     }, 5000);
     void sendNavState(true);
   });
 
   // 一覧からの除去はbrowser.ts側で済んでいる
   tab.page.on("close", () => {
+    for (const [key, cached] of pages) {
+      if (cached.viewKey.startsWith(`${tab.id}:`)) pages.delete(key);
+    }
     sendTabs();
     if (getActiveTabId() !== shownTabId) void activateTab(undefined);
   });
@@ -504,14 +633,25 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
   switch (msg.type) {
     case "hello": {
       send({ type: "helloAck", ver: 1, sessionId: randomUUID() });
+      // 別のキャッシュを持つクライアントに変わったら、送信済みの記憶は当てにならない
+      if (msg.cacheId !== clientCacheId) {
+        clientCacheId = msg.cacheId;
+        clientTiles.clear();
+        clientCacheUsed = 0;
+      }
+      clientCacheLimit = Number.isFinite(msg.cacheBytes)
+        ? Math.min(Math.max(msg.cacheBytes, 1 << 20), 1 << 28)
+        : clientCacheLimit;
+      // 画面には何も出ていないので、復帰であってもpageBeginから送り直す
+      setCurrent(undefined);
       await setViewport(clampViewport(msg.viewportW, msg.viewportH, msg.dpr));
       shownTabId = getActiveTabId();
       const wasLive = mode === "live";
-      await switchMode("page"); // クライアント UI はページモードで始まるため揃える
+      await switchMode("page"); // クライアントUIはページモードで始まるため揃える
       sendTabs();
       await sendNavState(false);
-      // ライブから戻した場合は switchMode 内でフル再送済み（二重 pageBegin を避ける）
-      if (!wasLive) await captureAndSend(true);
+      // ライブから戻した場合はswitchMode内で送信済み（二重のpageBeginを避ける）
+      if (!wasLive) await captureAndSend();
       break;
     }
     case "viewport": {
@@ -527,7 +667,7 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
         await cdp.send("Page.stopScreencast").catch(() => {});
         await startScreencast();
       } else {
-        await captureAndSend(true);
+        await captureAndSend();
       }
       break;
     }
@@ -574,19 +714,19 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       // 遷移が始まっていたら load イベント側のフル再送に任せる
       // （レイアウト未完了ページを送って帯域を無駄にしない）。ライブ中は screencast が映す
       setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend(false);
+        if (!pageLoading && mode === "page") void captureAndSend();
       }, 600);
       break;
     case "longPress":
       await longPress(msg.x, msg.y);
       setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend(false);
+        if (!pageLoading && mode === "page") void captureAndSend();
       }, 600);
       break;
     case "insertText":
       await insertText(msg.text);
       setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend(false);
+        if (!pageLoading && mode === "page") void captureAndSend();
       }, 600);
       break;
     case "key":
@@ -594,7 +734,7 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       // Enter はフォーム送信でフォーカスが外れることが多いので再評価する
       setTimeout(() => void sendFocusState(), 500);
       setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend(false);
+        if (!pageLoading && mode === "page") void captureAndSend();
       }, 600);
       break;
     case "setMode":
@@ -604,11 +744,10 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       liveFrameInFlight = false;
       trySendLiveFrame();
       break;
-    case "scrollPos":
-      clientScrollY = msg.y; // 送信キューの優先順位と pageExtend の判定に使う
+    case "scrollPos": {
       if (mode === "live") {
-        // ライブ中はローカルスクロールできない。window.scrollTo では
-        // 内部スクロールコンテナのサイト（YouTube 等）が動かないため、
+        // ライブ中はローカルスクロールできない。window.scrollToでは
+        // 内部スクロールコンテナのサイト（YouTube等）が動かないため、
         // タッチスクロールのジェスチャを合成して差分スクロールさせる
         const delta = msg.y - liveMetaScrollY;
         if (Math.abs(delta) > 5) {
@@ -623,10 +762,14 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
             })
             .catch(() => {});
         }
-      } else {
-        void maybeExtend();
+        break;
       }
+      // 遷移直後は前のページ向けの通知が遅れて届く
+      if (!current || msg.pageId !== current.pageId) break;
+      current.scrollY = msg.y; // 送信キューの優先順位とpageExtendの判定に使う
+      void maybeExtend();
       break;
+    }
     case "requestTiles":
       if (current) {
         for (const i of msg.indices) {
@@ -652,7 +795,6 @@ async function main(): Promise<void> {
       return;
     }
     console.log("client connected");
-    sentHashes.clear(); // 別のクライアントはタイルを持っていない
     client?.close(CLOSE_SUPERSEDED, "superseded");
     client = ws;
     liveFrameInFlight = false; // 旧接続の liveAck は二度と来ない

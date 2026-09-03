@@ -1,7 +1,6 @@
 package com.njm2360.strawser.net
 
 import android.util.Log
-import android.util.LruCache
 import kotlinx.serialization.SerializationException
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,9 +19,10 @@ import kotlin.math.min
  */
 class WsClient(
     private val serverUrl: String,
+    private val tiles: TileStore,
     private val viewport: () -> ClientMsg.Viewport,
     private val onMessage: (ServerMsg) -> Unit,
-    private val onTile: (pageId: String, tileIndex: Int, bytes: ByteArray) -> Unit,
+    private val onTile: (pageId: String, tileIndex: Int, hash: String) -> Unit,
     private val onLiveFrame: (header: ServerMsg.LiveFrameHeader, bytes: ByteArray) -> Unit,
     private val onConnectionChange: (connected: Boolean) -> Unit,
     private val onAuthError: () -> Unit,
@@ -32,15 +32,6 @@ class WsClient(
         private const val TAG = "WsClient"
         private const val CLOSE_UNAUTHORIZED = 4001
         private const val CLOSE_SUPERSEDED = 4002
-
-        // 受信済みタイルを持っておく量。サーバーがtileRefを出す判断に使う記憶数より
-        // 十分大きく取り、取りこぼしをrequestTilesの往復にしない
-        private const val TILE_CACHE_BYTES = 16 * 1024 * 1024
-    }
-
-    /** 戻る・進むや、開いたメニューを閉じた直後は同じバイト列のタイルが再び要る */
-    private val tileCache = object : LruCache<String, ByteArray>(TILE_CACHE_BYTES) {
-        override fun sizeOf(key: String, value: ByteArray) = value.size
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -96,7 +87,16 @@ class WsClient(
             // TCP が開いただけでは「接続済み」にしない。
             // 認証拒否でも onOpen は来るため、helloAck 受信で初めて緑にする
             val v = viewport()
-            send(ClientMsg.Hello(token = "", viewportW = v.width, viewportH = v.height, dpr = v.dpr))
+            send(
+                ClientMsg.Hello(
+                    token = "",
+                    viewportW = v.width,
+                    viewportH = v.height,
+                    dpr = v.dpr,
+                    cacheId = tiles.cacheId,
+                    cacheBytes = tiles.byteLimit,
+                ),
+            )
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -115,13 +115,30 @@ class WsClient(
                 pendingHeader = msg
             }
             if (msg is ServerMsg.TileRef) {
-                val cached = tileCache.get(msg.hash)
-                if (cached != null) {
-                    onTile(msg.pageId, msg.tileIndex, cached)
+                if (tiles.has(msg.hash)) {
+                    onTile(msg.pageId, msg.tileIndex, msg.hash)
                 } else {
-                    Log.i(TAG, "tile " + msg.tileIndex + " cache miss (" + msg.hash + ")")
+                    Log.i(TAG, "tile ${msg.tileIndex} cache miss (${msg.hash})")
                     send(ClientMsg.RequestTiles(listOf(msg.tileIndex)))
                 }
+                return
+            }
+            if (msg is ServerMsg.PageBegin) {
+                // hashが載るのは復帰したページ。手元に無いものはまとめて要求し、
+                // 引ける分だけを渡す（残りはサーバーが実体を送り直してくる）
+                val missing = mutableListOf<Int>()
+                val held = msg.hashes.mapIndexed { index, hash ->
+                    when {
+                        hash == null -> null
+                        tiles.has(hash) -> hash
+                        else -> null.also { missing += index }
+                    }
+                }
+                if (missing.isNotEmpty()) {
+                    Log.i(TAG, "restore: ${missing.size}/${msg.hashes.size} tiles missing")
+                    send(ClientMsg.RequestTiles(missing))
+                }
+                onMessage(msg.copy(hashes = held))
                 return
             }
             onMessage(msg)
@@ -136,9 +153,8 @@ class WsClient(
             when (header) {
                 is ServerMsg.TileHeader -> {
                     Log.d(TAG, "<- binary tile ${header.tileIndex} (${bytes.size} bytes)")
-                    val data = bytes.toByteArray()
-                    tileCache.put(header.hash, data)
-                    onTile(header.pageId, header.tileIndex, data)
+                    tiles.put(header.hash, bytes.toByteArray())
+                    onTile(header.pageId, header.tileIndex, header.hash)
                 }
                 is ServerMsg.LiveFrameHeader -> {
                     Log.d(TAG, "<- binary live frame (${bytes.size} bytes, scrollY ${header.scrollY})")

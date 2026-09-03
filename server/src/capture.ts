@@ -48,17 +48,22 @@ export interface Tile {
   // WebPへのエンコードは送信直前まで遅らせる。再キャプチャでは大半のタイルが
   // 変化なしで捨てられるうえ、送る分も優先順の高いものから先に符号化したい
   encode: () => Promise<EncodedTile>;
+  // 未符号化のタイルが掴んでいる元PNGを手放す。表示から外れたページに対して呼ぶ。
+  // 以後encodeは失敗するので、撮り直して差し替えること
+  drop: () => void;
 }
 
-// 符号化が済んだ時点で元PNGへの参照を切る。タイルは差し替わるまでCurrentPageに残るので、
+// 符号化が済んだ時点で元PNGへの参照を切る。タイルは差し替わるまでページ状態に残るので、
 // 掴んだままだとキャプチャ世代ぶんのPNGが積み上がる
 function makeTile(source: Sharp, region: Region, sig: Buffer): Tile {
   let src: Sharp | undefined = source;
   let inflight: Promise<EncodedTile> | undefined;
   return {
     sig,
-    encode: () =>
-      (inflight ??= src!
+    encode: () => {
+      if (inflight) return inflight;
+      if (!src) return Promise.reject(new Error("tile source released"));
+      return (inflight = src
         .clone()
         .extract(region)
         .webp({ quality: WEBP_QUALITY, effort: WEBP_EFFORT })
@@ -66,7 +71,11 @@ function makeTile(source: Sharp, region: Region, sig: Buffer): Tile {
         .then((data) => {
           src = undefined;
           return { data, hash: createHash("sha1").update(data).digest("hex").slice(0, 16) };
-        })),
+        }));
+    },
+    drop: () => {
+      if (!inflight) src = undefined;
+    },
   };
 }
 

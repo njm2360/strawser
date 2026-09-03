@@ -17,7 +17,9 @@ val protocolJson = Json {
 // ---- クライアント → サーバー ----
 @Serializable
 sealed interface ClientMsg {
-    // viewportW/Hはdp。サーバーはこの幅でエミュレートするので1 CSS px = 1 dpになる
+    // viewportW/Hはdp。サーバーはこの幅でエミュレートするので1 CSS px = 1 dpになる。
+    // cacheIdとcacheBytesはタイルキャッシュの世代と容量。再接続で同じidを名乗れば
+    // サーバーは送信済みの記憶を持ち越す
     @Serializable
     @SerialName("hello")
     data class Hello(
@@ -26,6 +28,8 @@ sealed interface ClientMsg {
         val viewportW: Int,
         val viewportH: Int,
         val dpr: Float,
+        val cacheId: String,
+        val cacheBytes: Int,
     ) : ClientMsg
 
     // 画面回転などで表示領域が変わったとき
@@ -73,11 +77,11 @@ sealed interface ClientMsg {
     @SerialName("longPress")
     data class LongPress(val x: Double, val y: Double) : ClientMsg
 
-    // ローカルスクロール位置通知（300ms スロットル、ページ座標）。
-    // ライブモード中は「実ページをこの位置へスクロールせよ」の意味になる
+    // ローカルスクロール位置通知（300msスロットル、ページ座標）。
+    // ライブモード中は「実ページをこの位置へスクロールせよ」の意味になり、pageIdは空になる
     @Serializable
     @SerialName("scrollPos")
-    data class ScrollPos(val y: Int) : ClientMsg
+    data class ScrollPos(val pageId: String, val y: Int) : ClientMsg
 
     // IME で確定した文字列をまとめて送る
     @Serializable
@@ -120,7 +124,9 @@ sealed interface ServerMsg {
         val byteLength: Int,
     ) : ServerMsg
 
-    // 以後このページのタイルが届く。pageWidthが以降の座標の基準
+    // 以後このページのタイルが届く。pageWidthが以降の座標の基準。
+    // scrollYは表示を始める位置で、戻る・進む・タブ切替では離れたときの位置が返る。
+    // hashesは手元にあるはずのタイル（index順、届いていないものはnull）
     @Serializable
     @SerialName("pageBegin")
     data class PageBegin(
@@ -131,6 +137,8 @@ sealed interface ServerMsg {
         val fullHeight: Int,
         val tileHeight: Int,
         val tileCount: Int,
+        val scrollY: Int,
+        val hashes: List<String?>,
     ) : ServerMsg
 
     // 直後のバイナリフレームがタイル本体。offsetYはページ座標。

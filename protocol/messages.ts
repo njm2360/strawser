@@ -12,8 +12,11 @@
 // ---- クライアント → サーバー ----
 export type ClientMsg =
   // viewportW/Hはdp、dprは端末の表示密度。サーバーはこれをエミュレーション幅と転送解像度に
-  // 反映する（dprはサーバー側の上限で切り詰められる）
-  | { type: "hello"; ver: 1; token: string; viewportW: number; viewportH: number; dpr: number }
+  // 反映する（dprはサーバー側の上限で切り詰められる）。
+  // cacheIdはタイルキャッシュの世代。再接続で同じidが来ればサーバーは送信済みの記憶を
+  // 持ち越す。cacheBytesはその容量で、サーバーは同じ容量でクライアントの中身を推定する
+  | { type: "hello"; ver: 1; token: string; viewportW: number; viewportH: number; dpr: number;
+      cacheId: string; cacheBytes: number }
   // 画面回転などによる表示領域の変更
   | { type: "viewport"; width: number; height: number; dpr: number }
   // 絶対URL。URLか検索語かの振り分けと検索エンジンはクライアントが持つ
@@ -26,7 +29,9 @@ export type ClientMsg =
   | { type: "selectTab"; tabId: string }
   | { type: "tap"; x: number; y: number }            // ページ座標（pageWidth基準）
   | { type: "longPress"; x: number; y: number }
-  | { type: "scrollPos"; y: number }                  // ローカルスクロール位置通知（300ms スロットル）
+  // ローカルスクロール位置通知（300msスロットル）。live中はpageIdを空にする。
+  // 遷移直後は前のページ向けの通知が遅れて届くので、サーバーはpageIdで宛先を確かめる
+  | { type: "scrollPos"; pageId: string; y: number }
   | { type: "insertText"; text: string }              // IME 確定文字列
   | { type: "key"; key: "Enter" | "Backspace" }
   | { type: "setMode"; mode: "page" | "live" }        // ライブモード切替
@@ -39,9 +44,13 @@ export type ServerMsg =
   | { type: "helloAck"; ver: 1; sessionId: string }
   // 直後のバイナリフレームが本体。width/heightはページ座標（CSS px）
   | { type: "screenshotHeader"; format: "webp"; width: number; height: number; byteLength: number }
-  // pageWidthはこのページのタイルを撮ったエミュレーション幅。以降の座標はすべてこれが基準
+  // pageWidthはこのページのタイルを撮ったエミュレーション幅。以降の座標はすべてこれが基準。
+  // scrollYは表示を始める位置。戻る・進む・タブ切替では離れたときの位置が返る。
+  // hashesはindex順のタイルhashで、クライアントが持っているはずのものだけ入る（未送信はnull）。
+  // 手元に無かったものはrequestTilesで要求し直す
   | { type: "pageBegin"; pageId: string; url: string; title: string; pageWidth: number;
-      fullHeight: number; tileHeight: number; tileCount: number }
+      fullHeight: number; tileHeight: number; tileCount: number; scrollY: number;
+      hashes: (string | null)[] }
   // hashはこのタイルのバイト列の識別子。クライアントは受け取った実体をhashで持っておく
   | { type: "tileHeader"; pageId: string; tileIndex: number; offsetY: number;
       format: "webp"; byteLength: number; hash: string }

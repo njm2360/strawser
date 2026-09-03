@@ -56,6 +56,7 @@ private fun AppRoot(modifier: Modifier = Modifier) {
                 BrowserScreen(
                     serverUrl = settings.connectUrl(),
                     searchEngine = settings.searchEngine,
+                    tileCacheBytes = settings.tileCacheBytes,
                     onOpenSettings = {
                         settingsError = null
                         showSettings = true
@@ -77,8 +78,9 @@ private fun AppRoot(modifier: Modifier = Modifier) {
                 onDismiss = { showSettings = false },
                 onSave = { saved ->
                     saved.save(prefs)
-                    val searchEngineOnly = saved.connectUrl() == settings.connectUrl() &&
-                        saved.searchEngine != settings.searchEngine
+                    // 検索エンジンだけの変更なら張り直さない（キャッシュも保つ）
+                    val searchEngineOnly = saved.copy(searchEngine = settings.searchEngine) ==
+                        settings && saved.searchEngine != settings.searchEngine
                     settings = saved
                     if (!searchEngineOnly) connectGeneration++
                     settingsError = null
