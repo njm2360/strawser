@@ -70,7 +70,10 @@ function makeTile(source: Sharp, region: Region, sig: Buffer): Tile {
         .toBuffer()
         .then((data) => {
           src = undefined;
-          return { data, hash: createHash("sha1").update(data).digest("hex").slice(0, 16) };
+          return {
+            data,
+            hash: createHash("sha1").update(data).digest("hex").slice(0, 16),
+          };
         }));
     },
     drop: () => {
@@ -80,9 +83,9 @@ function makeTile(source: Sharp, region: Region, sig: Buffer): Tile {
 }
 
 export interface FullPageCapture {
-  fullHeight: number;    // 今回キャプチャ済みの高さ（ページ座標）
+  fullHeight: number; // 今回キャプチャ済みの高さ（ページ座標）
   contentHeight: number; // ページ全体の高さ（fullHeight より大きければ未取得部分がある）
-  tiles: Tile[];         // tiles[i] は offsetY = i * TILE_HEIGHT
+  tiles: Tile[]; // tiles[i] は offsetY = i * TILE_HEIGHT
 }
 
 // WebP のバイト列はエンコード揺らぎで同一内容でも一致しないため、

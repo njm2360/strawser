@@ -63,12 +63,12 @@ interface CurrentPage {
   // 合わなくなったページは作り直す
   pageWidth: number;
   tileHeight: number;
-  fullHeight: number;    // クライアントに通知済みのキャプチャ高さ
+  fullHeight: number; // クライアントに通知済みのキャプチャ高さ
   contentHeight: number; // 実ページ全体の高さ（fullHeightより大きければ未取得部分あり）
   tiles: Tile[];
   // 送信済みタイルのhash。undefinedはまだクライアントへ届いていない
   hashes: (string | undefined)[];
-  scrollY: number;      // クライアントのローカルスクロール位置（ページ座標）
+  scrollY: number; // クライアントのローカルスクロール位置（ページ座標）
   pending: Set<number>; // まだ送っていない、または更新されたタイルのindex
   // tileRefが外れてクライアントから要求し直されたindex。実体を送る
   forceRaw: Set<number>;
@@ -169,7 +169,13 @@ async function pumpTiles(): Promise<void> {
       rememberHash(hash, data.byteLength);
       page.hashes[index] = hash;
       if (!raw) {
-        send({ type: "tileRef", pageId: page.pageId, tileIndex: index, offsetY, hash });
+        send({
+          type: "tileRef",
+          pageId: page.pageId,
+          tileIndex: index,
+          offsetY,
+          hash,
+        });
         continue;
       }
       send({
@@ -507,8 +513,16 @@ async function sendFocusState(): Promise<void> {
       if (tag === "input") {
         const type = (el as HTMLInputElement).type;
         const nonText = [
-          "button", "submit", "checkbox", "radio", "file",
-          "image", "range", "color", "reset", "hidden",
+          "button",
+          "submit",
+          "checkbox",
+          "radio",
+          "file",
+          "image",
+          "range",
+          "color",
+          "reset",
+          "hidden",
         ];
         return nonText.includes(type) ? "none" : "text";
       }
@@ -676,7 +690,10 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       current?.pending.clear();
       await sendNavState(true);
       await page.goto(msg.url, { waitUntil: "load", timeout: 30_000 }).catch((e) => {
-        send({ type: "error", message: stripAnsi(`navigate failed: ${String(e)}`) });
+        send({
+          type: "error",
+          message: stripAnsi(`navigate failed: ${String(e)}`),
+        });
       });
       break;
     }

@@ -6,9 +6,9 @@ import { chromium, type BrowserContext, type CDPSession, type Page } from "playw
 export const DEVICE_SCALE = 2;
 
 export interface Viewport {
-  width: number;  // エミュレーション幅（CSS px）。クライアントの表示幅dpをそのまま使う
+  width: number; // エミュレーション幅（CSS px）。クライアントの表示幅dpをそのまま使う
   height: number;
-  scale: number;  // 送信画像のCSS pxあたりのピクセル数
+  scale: number; // 送信画像のCSS pxあたりのピクセル数
 }
 
 // クライアントのhelloが来るまでの暫定値
@@ -33,7 +33,10 @@ export function clampViewport(width: number, height: number, dpr: number): Viewp
 // 背景タブは切り替え時に撮り直すので、表示中のタブだけ合わせればよい
 export async function setViewport(next: Viewport): Promise<void> {
   viewport = next;
-  await getActiveTab().page.setViewportSize({ width: next.width, height: next.height });
+  await getActiveTab().page.setViewportSize({
+    width: next.width,
+    height: next.height,
+  });
 }
 
 // ログインセッション等を永続化するユーザーデータディレクトリ
@@ -119,7 +122,13 @@ function register(page: Page): Promise<Tab> {
   if (inflight) return inflight;
   const started = (async () => {
     const cdp = await context!.newCDPSession(page);
-    const tab: Tab = { id: randomUUID(), page, cdp, title: "", url: page.url() };
+    const tab: Tab = {
+      id: randomUUID(),
+      page,
+      cdp,
+      title: "",
+      url: page.url(),
+    };
     tabs.push(tab);
     // ページ自身が閉じた場合（window.close等）も一覧から外す
     page.once("close", () => drop(tab.id));
@@ -168,7 +177,10 @@ export async function openTab(url: string = NEW_TAB_URL): Promise<Tab> {
   const page = await context!.newPage();
   const tab = await register(page);
   activeId = tab.id;
-  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  await page.setViewportSize({
+    width: viewport.width,
+    height: viewport.height,
+  });
   if (url !== NEW_TAB_URL) await page.goto(url, { timeout: 30_000 }).catch(() => {});
   return tab;
 }

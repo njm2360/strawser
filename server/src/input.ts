@@ -49,7 +49,12 @@ export async function insertText(text: string): Promise<void> {
 
 const KEY_DEFS = {
   Enter: { key: "Enter", code: "Enter", keyCode: 13, text: "\r" },
-  Backspace: { key: "Backspace", code: "Backspace", keyCode: 8, text: undefined },
+  Backspace: {
+    key: "Backspace",
+    code: "Backspace",
+    keyCode: 8,
+    text: undefined,
+  },
 } as const;
 
 export async function pressKey(key: keyof typeof KEY_DEFS): Promise<void> {
