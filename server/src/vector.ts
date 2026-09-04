@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import sharp from "sharp";
-import { getActivePage, getViewport } from "./browser.ts";
+import { getActivePage, getViewport, screenshotRegion } from "./browser.ts";
 import { walkPage, seedTables, type AssetRect, type Extraction } from "./page-script.ts";
 import type { DisplayList, DrawOp, OpChunk } from "./protocol.ts";
 
@@ -101,7 +101,6 @@ export async function captureAssets(
   nodeIds: number[],
   background: ReadonlySet<number>,
 ): Promise<EncodedAsset[]> {
-  const { page, cdp } = getActivePage();
   const rects = await freshRects(nodeIds);
   if (rects.length === 0) return [];
   const { width: pageWidth, scale } = getViewport();
@@ -116,9 +115,6 @@ export async function captureAssets(
   const out: EncodedAsset[] = [];
   for (const [band, list] of bands) {
     const baseY = band * BAND_HEIGHT;
-    // 遅延読み込みは実ページがそこを通らないと発火しない
-    await page.evaluate((y) => window.scrollTo(0, y), baseY).catch(() => {});
-    await page.waitForTimeout(150);
     for (const asBackground of [false, true]) {
       const group = list.filter((r) => background.has(r.nodeId) === asBackground);
       if (group.length === 0) continue;
@@ -127,7 +123,7 @@ export async function captureAssets(
           group.map((r) => r.nodeId),
           true,
         );
-      await encodeBand(out, cdp, baseY, pageWidth, scale, group);
+      await encodeBand(out, baseY, pageWidth, scale, group);
       if (asBackground)
         await maskDescendants(
           group.map((r) => r.nodeId),
@@ -140,21 +136,20 @@ export async function captureAssets(
 
 async function encodeBand(
   out: EncodedAsset[],
-  cdp: ReturnType<typeof getActivePage>["cdp"],
   baseY: number,
   pageWidth: number,
   scale: number,
   list: AssetRect[],
 ): Promise<void> {
-  const shot = await cdp
-    .send("Page.captureScreenshot", {
-      format: "png",
-      clip: { x: 0, y: baseY, width: pageWidth, height: BAND_HEIGHT, scale },
-      captureBeyondViewport: true,
-    })
-    .catch(() => undefined);
+  const shot = await screenshotRegion({
+    x: 0,
+    y: baseY,
+    width: pageWidth,
+    height: BAND_HEIGHT,
+    scale,
+  });
   if (!shot) return;
-  const img = sharp(Buffer.from(shot.data, "base64"));
+  const img = sharp(shot);
   const meta = await img.metadata();
   for (const r of list) {
     const left = Math.max(0, Math.round(r.x * scale));

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import sharp, { type Region, type Sharp } from "sharp";
-import { getActivePage, getViewport } from "./browser.ts";
+import { getActivePage, getViewport, screenshotRegion } from "./browser.ts";
 
 // 1タイルの送信画像の高さ（px）。タイル1枚あたりのバイト数をここで一定に保つので、
 // 解像度倍率が上がるとページ座標でのタイル高さはその分薄くなる。
@@ -122,16 +122,11 @@ export async function triggerLazyLoad(fromY: number, toY: number): Promise<void>
 // [fromY, toY)を縦getTileHeight()ごとのタイルに分割してキャプチャする。
 // fromYはタイル高さの倍数であること
 export async function captureRegion(fromY: number, toY: number): Promise<Tile[]> {
-  const { cdp } = getActivePage();
   const { width: pageWidth, scale } = getViewport();
   const step = getTileHeight();
   const height = toY - fromY;
-  const shot = await cdp.send("Page.captureScreenshot", {
-    format: "png",
-    clip: { x: 0, y: fromY, width: pageWidth, height, scale },
-    captureBeyondViewport: true,
-  });
-  const png = Buffer.from(shot.data, "base64");
+  const png = await screenshotRegion({ x: 0, y: fromY, width: pageWidth, height, scale });
+  if (!png) return [];
   const img = sharp(png);
   // CDPの丸め方はこちらの計算と一致するとは限らないので、実寸に合わせて切り出す
   const meta = await img.metadata();

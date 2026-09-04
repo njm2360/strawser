@@ -39,6 +39,57 @@ export async function setViewport(next: Viewport): Promise<void> {
   });
 }
 
+interface Clip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+}
+
+async function setMetrics(cdp: CDPSession, height: number): Promise<void> {
+  const landscape = viewport.width > viewport.height;
+  await cdp
+    .send("Emulation.setDeviceMetricsOverride", {
+      mobile: true,
+      width: viewport.width,
+      height,
+      screenWidth: viewport.width,
+      screenHeight: viewport.height,
+      deviceScaleFactor: DEVICE_SCALE,
+      screenOrientation: landscape
+        ? { angle: 90, type: "landscapePrimary" }
+        : { angle: 0, type: "portraitPrimary" },
+    })
+    .catch(() => {});
+}
+
+// 版面を広げた直後は組み直しの途中を撮ることがある
+const RELAYOUT_MS = 150;
+
+/**
+ * ページ座標の[clip.y, clip.y+clip.height)を1枚に撮る。clip.scaleは送信画像のCSS pxあたりのピクセル数。
+ *
+ * captureBeyondViewportはclipと併せるとページを別の版面で描き、撮り終えても
+ * deviceScaleFactorを1のままにする
+ */
+export async function screenshotRegion(clip: Clip): Promise<Buffer | undefined> {
+  const { page, cdp } = getActiveTab();
+  const at: number = await page.evaluate(() => window.scrollY).catch(() => 0);
+  await setMetrics(cdp, clip.height);
+  await page.evaluate((y) => window.scrollTo(0, y), clip.y).catch(() => {});
+  await page.waitForTimeout(RELAYOUT_MS);
+  const shot = await cdp
+    .send("Page.captureScreenshot", {
+      format: "png",
+      clip: { ...clip, scale: clip.scale / DEVICE_SCALE },
+    })
+    .catch(() => undefined);
+  await setMetrics(cdp, viewport.height);
+  await page.evaluate((y) => window.scrollTo(0, y), at).catch(() => {});
+  return shot && Buffer.from(shot.data, "base64");
+}
+
 // ログインセッション等を永続化するユーザーデータディレクトリ
 const USER_DATA_DIR = path.resolve(import.meta.dirname, "..", "user-data");
 
@@ -89,21 +140,28 @@ function systemLocale(): string {
   return lang || Intl.DateTimeFormat().resolvedOptions().locale;
 }
 
-export async function startBrowser(tabOpened: (tab: Tab) => void): Promise<void> {
-  onTabOpened = tabOpened;
+// 条件が1つでも欠けるとGoogleはCAPTCHAを返す
+export async function emulationOptions(
+  size: { width: number; height: number } = viewport,
+): Promise<Parameters<typeof chromium.launchPersistentContext>[1]> {
   const timezoneId = systemTimezone();
-  context = await chromium.launchPersistentContext(USER_DATA_DIR, {
+  return {
     // 既定のheadless shellはsec-ch-uaでHeadlessChromeを自己申告し、window.chromeも生えない
     channel: "chromium",
     args: ["--disable-blink-features=AutomationControlled"],
-    viewport: { width: viewport.width, height: viewport.height },
+    viewport: { width: size.width, height: size.height },
     deviceScaleFactor: DEVICE_SCALE,
     isMobile: true,
     hasTouch: true,
     userAgent: await mobileUserAgent(),
     locale: systemLocale(),
     ...(timezoneId ? { timezoneId } : {}),
-  });
+  };
+}
+
+export async function startBrowser(tabOpened: (tab: Tab) => void): Promise<void> {
+  onTabOpened = tabOpened;
+  context = await chromium.launchPersistentContext(USER_DATA_DIR, await emulationOptions());
   // target=_blankやwindow.openで開いたページもタブとして拾う
   context.on("page", (page) => void register(page));
   const first = context.pages()[0];
