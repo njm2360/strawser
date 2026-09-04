@@ -2,11 +2,6 @@ package com.njm2360.strawser.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -29,13 +24,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -46,11 +37,6 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.withContext
 import kotlin.math.min
 import kotlin.math.roundToInt
-
-// ローカルズームの倍率。1.0でエミュレーション幅が表示幅にちょうど収まる。
-// 上限より上はタイルを引き伸ばすだけになる
-private const val MIN_ZOOM = 1f
-private const val MAX_ZOOM = 4f
 
 @Composable
 internal fun RemotePageView(
@@ -171,33 +157,6 @@ internal fun RemotePageView(
                 }
             }
         }
-    }
-}
-
-/**
- * 二本指のときだけピンチを拾う。一本指のイベントは消費せずLazyColumnの縦スクロールへ流す。
- * 二本目が触れた後は最後の指が離れるまで消費し続ける（途中でLazyColumnに奪われると飛ぶ）
- */
-private suspend fun PointerInputScope.detectPinch(
-    onPinch: (centroid: Offset, zoomChange: Float, panChange: Offset) -> Unit,
-) {
-    awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        var pinching = false
-        do {
-            // LazyColumnはMainパスで判定するので、その前に消費しないと縦に流れる
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            if (event.changes.count { it.pressed } >= 2) pinching = true
-            if (pinching) {
-                // 直前も接地していた指が1本も無いフレーム（同時タッチダウンなど）では
-                // centroidがUnspecifiedになる。NaNを倍率と横位置に流すと以後戻せない
-                val centroid = event.calculateCentroid()
-                if (centroid.isSpecified) {
-                    onPinch(centroid, event.calculateZoom(), event.calculatePan())
-                }
-                event.changes.forEach { it.consume() }
-            }
-        } while (event.changes.any { it.pressed })
     }
 }
 

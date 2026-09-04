@@ -159,12 +159,19 @@ internal fun VectorPageView(
     BoxWithConstraints(modifier = modifier.clipToBounds()) {
         val viewportPx = constraints.maxWidth.toFloat()
         val viewportHeightPx = constraints.maxHeight.toFloat()
-        // 1 CSS px = 1 dpなので、これは端末の表示密度そのものになる
-        val scale = viewportPx / page.list.pageWidth
+        // 差分で表示リストが差し替わっても倍率と横位置は保つ。
+        // 横位置は表示px基準なので、回転で幅が変われば捨てる
+        var zoom by remember(page.viewKey, viewportPx) { mutableFloatStateOf(MIN_ZOOM) }
+        var panPx by remember(page.viewKey, viewportPx) { mutableFloatStateOf(0f) } // 常に0以下
+        // 倍率1.0で1 CSS px = 1 dpになる
+        val scale = viewportPx * zoom / page.list.pageWidth
         val maxScroll = max(0f, page.list.fullHeight * scale - viewportHeightPx)
         var scrollY by remember(page) {
             mutableFloatStateOf((page.scrollY * scale).coerceIn(0f, maxScroll))
         }
+        // 当たり判定とscrollPosはこの倍率経由。ピンチのたびに貼り直さないpointerInputと
+        // snapshotFlowからはこちらを読む
+        val curScale by rememberUpdatedState(scale)
 
         val wanted = remember(page) { mutableStateListOf<Int>() }
         // hashは持っているのにバイト列が落ちたもの。assetRefで返されると灰色のまま戻らない
@@ -182,13 +189,14 @@ internal fun VectorPageView(
             }
         }
 
-        // 読んでいる位置をサーバーへ通知する。無限スクロールの継ぎ足しの判定に使う
+        // 読んでいる位置をサーバーへ通知する。無限スクロールの継ぎ足しの判定に使う。
+        // ズームだけでもページ座標は動くので、変換した後の値を見る
         val report by rememberUpdatedState(onScrollPos)
         LaunchedEffect(page) {
-            snapshotFlow { scrollY }
+            snapshotFlow { (scrollY / curScale).toInt() }
                 .conflate()
                 .collect { y ->
-                    report(page.listId, (y / scale).toInt())
+                    report(page.listId, y)
                     delay(300)
                 }
         }
@@ -198,6 +206,23 @@ internal fun VectorPageView(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(page.bgColor))
+                // 二本目の指を縦スクロールとタップに取られないよう、両者より先に置く。
+                // 倍率はこのなかで変わるので、外で計算したscaleは使えない
+                .pointerInput(page) {
+                    detectPinch { centroid, zoomChange, panChange ->
+                        val next = (zoom * zoomChange).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                        val grow = next / zoom
+                        val nextScale = viewportPx * next / page.list.pageWidth
+                        // ピンチ中心の下にあるページ上の点を動かさない
+                        panPx = (centroid.x - (centroid.x - panPx) * grow + panChange.x)
+                            .coerceIn(-viewportPx * (next - 1f), 0f)
+                        val limit = max(0f, page.list.fullHeight * nextScale - viewportHeightPx)
+                        scrollY = ((centroid.y + scrollY) * grow - centroid.y - panChange.y)
+                            .coerceIn(0f, limit)
+                        zoom = next
+                        page.scrollY = scrollY / nextScale
+                    }
+                }
                 .scrollable(
                     orientation = Orientation.Vertical,
                     state = rememberScrollableState { delta ->
@@ -210,8 +235,8 @@ internal fun VectorPageView(
                 )
                 .pointerInput(page) {
                     detectTapGestures { offset ->
-                        val x = offset.x / scale
-                        val y = (offset.y + scrollY) / scale
+                        val x = (offset.x - panPx) / curScale
+                        val y = (offset.y + scrollY) / curScale
                         val nodeId = page.hit(x, y)
                         if (nodeId >= 0) onActivate(nodeId, x.toDouble(), y.toDouble())
                     }
@@ -221,7 +246,7 @@ internal fun VectorPageView(
             val top = scrollY / scale
             val bottom = (scrollY + viewportHeightPx) / scale
             canvas.save()
-            canvas.translate(0f, -scrollY)
+            canvas.translate(panPx, -scrollY)
             canvas.scale(scale, scale)
             for (op in page.opsIn(top, bottom)) {
                 // overflowで切れる分はサーバーが枠を載せてくる
