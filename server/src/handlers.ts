@@ -245,6 +245,8 @@ export async function handleMsg(msg: ClientMsg): Promise<void> {
           send({ type: "assetRef", listId: list.listId, nodeId, hash });
           continue;
         }
+        // 撮れないものを撮り直し続けると、撮れるはずの画像が後ろで待たされる
+        if (!msg.raw && list.missing.has(nodeId)) continue;
         if (msg.raw) list.forceRaw.add(nodeId);
         if (!assetQueue.includes(nodeId)) assetQueue.push(nodeId);
       }

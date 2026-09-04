@@ -20,6 +20,9 @@ interface CurrentList {
   assets: Map<number, string>;
   // バイト列を失ったとクライアントが言ってきたnodeId。assetRefで返しても絵は戻らない
   forceRaw: Set<number>;
+  // 撮れなかったnodeId。クライアントは灰色のあいだ要求し続けるので、
+  // 覚えておかないと撮り直しがキューを埋めて他の画像を締め出す
+  missing: Set<number>;
   // 背景として撮るnodeId。撮影中は子孫を隠す
   background: Set<number>;
 }
@@ -120,7 +123,9 @@ async function extractOnce(): Promise<void> {
     // 差し込まれた画像は位置か大きさが変わっている。撮り直させる
     for (const chunk of diff.ops) {
       for (const op of chunk.o ?? []) {
-        if (op.t === 2 && op.i !== undefined) base.assets.delete(op.i);
+        if (op.t !== 2 || op.i === undefined) continue;
+        base.assets.delete(op.i);
+        base.missing.delete(op.i);
       }
     }
     base.listId = listId;
@@ -139,6 +144,7 @@ async function extractOnce(): Promise<void> {
     list: snap.list,
     assets: new Map(),
     forceRaw: new Set(),
+    missing: new Set(),
     background,
   });
   send(full);
@@ -233,9 +239,14 @@ export async function pumpAssets(): Promise<void> {
       const ws = client;
       // 撮っているあいだにも位置は動く。1回分ごとに選び直す
       sortAssetQueue(list);
-      const assets = await captureAssets(assetQueue.splice(0, ASSET_BATCH), list.background);
+      const batch = assetQueue.splice(0, ASSET_BATCH);
+      const assets = await captureAssets(batch, list.background);
       // 切り出しを待つ間にページが差し替わっていたら送らない
       if (currentList !== list) break;
+      const taken = new Set(assets.map((a) => a.nodeId));
+      for (const nodeId of batch) {
+        if (!taken.has(nodeId)) list.missing.add(nodeId);
+      }
       for (const asset of assets) {
         const held = !list.forceRaw.delete(asset.nodeId) && clientTiles.has(asset.hash);
         rememberHash(asset.hash, asset.data.byteLength);
