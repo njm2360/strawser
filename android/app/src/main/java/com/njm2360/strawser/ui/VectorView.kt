@@ -1,5 +1,8 @@
 package com.njm2360.strawser.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
@@ -13,13 +16,19 @@ import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -27,9 +36,17 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.net.DisplayList
 import com.njm2360.strawser.net.DrawOp
 import com.njm2360.strawser.net.ServerMsg
@@ -37,6 +54,7 @@ import com.njm2360.strawser.net.TileStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 // 描画コマンドをy座標で束ねる幅
 private const val BAND = 512
@@ -63,16 +81,23 @@ internal class VectorPage(
     val bgColor: Int = if (list.bg in colors.indices) colors[list.bg] else 0xFFFFFFFF.toInt()
     val assets = mutableStateMapOf<Int, String>()
 
-    private val bands: Map<Int, List<DrawOp>> = list.ops.groupBy { (it.b[1] / BAND).toInt() }
+    private val bands: Map<Int, List<Int>> =
+        list.ops.indices.groupBy { (list.ops[it].b[1] / BAND).toInt() }
 
     /** 高い矩形が上の帯から垂れてくるので、band4つぶん余分に見る */
-    fun opsIn(top: Float, bottom: Float): Sequence<DrawOp> {
+    fun indicesIn(top: Float, bottom: Float): Sequence<Int> {
         val from = max(0, (top / BAND).toInt() - 4)
         val to = (bottom / BAND).toInt()
         return (from..to).asSequence()
             .flatMap { bands[it].orEmpty() }
-            .filter { it.b[1] < bottom && it.b[1] + it.b[3] > top }
+            .filter {
+                val op = list.ops[it]
+                op.b[1] < bottom && op.b[1] + op.b[3] > top
+            }
     }
+
+    fun opsIn(top: Float, bottom: Float): Sequence<DrawOp> =
+        indicesIn(top, bottom).map { list.ops[it] }
 
     /** 押された位置の要素。手前に描かれたものが勝つ */
     fun hit(x: Float, y: Float): Int {
@@ -173,6 +198,30 @@ internal fun VectorPageView(
         // snapshotFlowからはこちらを読む
         val curScale by rememberUpdatedState(scale)
 
+        // 差分が届くと行の番号が変わるので持ち越さない
+        val measure = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
+        var anchor by remember(page) { mutableStateOf<TextPos?>(null) }
+        var focus by remember(page) { mutableStateOf<TextPos?>(null) }
+        // 長押しで選んだ一語。指がそこから出るまでは語のまま保つ
+        var word by remember(page) { mutableStateOf<Pair<TextPos, TextPos>?>(null) }
+        val selection = anchor?.let { a -> focus?.let { f -> if (a <= f) a to f else f to a } }
+        val selRects = remember(page, selection) {
+            selection?.let { page.selectionRects(it.first, it.second, measure) }.orEmpty()
+        }
+        val handles = selRects.firstOrNull()?.let { first ->
+            val last = selRects.last()
+            Offset(first.left * scale + panPx, first.bottom * scale - scrollY) to
+                Offset(last.right * scale + panPx, last.bottom * scale - scrollY)
+        }
+        val liveHandles by rememberUpdatedState(handles)
+        val handleRadius = with(LocalDensity.current) { 9.dp.toPx() }
+        val grabRadius = with(LocalDensity.current) { 24.dp.toPx() }
+        val gapPx = with(LocalDensity.current) { 8.dp.toPx() }
+        val highlight = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f).toArgb()
+        val handleColor = MaterialTheme.colorScheme.primary
+        val context = LocalContext.current
+        fun pagePoint(at: Offset) = Offset((at.x - panPx) / curScale, (at.y + scrollY) / curScale)
+
         val wanted = remember(page) { mutableStateListOf<Int>() }
         // hashは持っているのにバイト列が落ちたもの。assetRefで返されると灰色のまま戻らない
         val lost = remember(page) { mutableStateListOf<Int>() }
@@ -223,6 +272,63 @@ internal fun VectorPageView(
                         page.scrollY = scrollY / nextScale
                     }
                 }
+                // 長押しを取り逃がすとスクロールに化けるので、スクロールより先に置く
+                .pointerInput(page) {
+                    detectTextSelect(
+                        onHandle = { at ->
+                            val ends = liveHandles
+                            val a = anchor
+                            val f = focus
+                            if (ends == null || a == null || f == null) {
+                                false
+                            } else {
+                                val toStart = (at - ends.first).getDistance()
+                                val toEnd = (at - ends.second).getDistance()
+                                val grabbed = minOf(toStart, toEnd) <= grabRadius
+                                if (grabbed) {
+                                    // 掴んだ側だけ動かす
+                                    val head = if (a <= f) a else f
+                                    val tail = if (a <= f) f else a
+                                    anchor = if (toStart <= toEnd) tail else head
+                                    focus = if (toStart <= toEnd) head else tail
+                                    word = null
+                                }
+                                grabbed
+                            }
+                        },
+                        onLongPress = { at ->
+                            val point = pagePoint(at)
+                            val hit = page.textAt(point.x, point.y, measure, inside = true)
+                            if (hit != null) {
+                                val picked = page.wordAt(hit)
+                                word = picked
+                                anchor = picked.first
+                                focus = picked.second
+                            }
+                            hit != null
+                        },
+                        onDrag = { at ->
+                            val point = pagePoint(at)
+                            val to = page.textAt(point.x, point.y, measure) ?: return@detectTextSelect
+                            val picked = word
+                            when {
+                                picked == null -> focus = to
+                                to < picked.first -> {
+                                    anchor = picked.second
+                                    focus = to
+                                }
+                                to > picked.second -> {
+                                    anchor = picked.first
+                                    focus = to
+                                }
+                                else -> {
+                                    anchor = picked.first
+                                    focus = picked.second
+                                }
+                            }
+                        },
+                    )
+                }
                 .scrollable(
                     orientation = Orientation.Vertical,
                     state = rememberScrollableState { delta ->
@@ -235,6 +341,11 @@ internal fun VectorPageView(
                 )
                 .pointerInput(page) {
                     detectTapGestures { offset ->
+                        if (anchor != null) {
+                            anchor = null
+                            focus = null
+                            return@detectTapGestures
+                        }
                         val x = (offset.x - panPx) / curScale
                         val y = (offset.y + scrollY) / curScale
                         val nodeId = page.hit(x, y)
@@ -274,9 +385,65 @@ internal fun VectorPageView(
                 }
                 if (clipped) canvas.restore()
             }
+            if (selRects.isNotEmpty()) {
+                paint.reset()
+                paint.color = highlight
+                for (r in selRects) {
+                    if (r.bottom >= top && r.top <= bottom) canvas.drawRect(r, paint)
+                }
+            }
             canvas.restore()
+            handles?.let { (start, end) ->
+                drawCircle(handleColor, handleRadius, start)
+                drawCircle(handleColor, handleRadius, end)
+            }
+        }
+        var barSize by remember(page) { mutableStateOf(IntSize.Zero) }
+        val selTop = selRects.firstOrNull()?.let { it.top * scale - scrollY }
+        val selBottom = selRects.lastOrNull()?.let { it.bottom * scale - scrollY }
+        // 選択が画面から出たらバーも引っ込める
+        if (selection != null && selTop != null && selBottom != null &&
+            selBottom > 0f && selTop < viewportHeightPx
+        ) {
+            val center = (selRects.first().left + selRects.first().right) / 2f * scale + panPx
+            val above = selTop - barSize.height - gapPx
+            val below = selBottom + gapPx
+            SelectionBar(
+                onCopy = {
+                    copyText(context, page.selectedText(selection.first, selection.second))
+                    anchor = null
+                    focus = null
+                },
+                modifier = Modifier
+                    .onSizeChanged { barSize = it }
+                    .offset {
+                        IntOffset(
+                            (center - barSize.width / 2f)
+                                .coerceIn(0f, max(0f, viewportPx - barSize.width)).roundToInt(),
+                            (if (above >= 0f) above else below)
+                                .coerceIn(0f, max(0f, viewportHeightPx - barSize.height)).roundToInt(),
+                        )
+                    },
+            )
         }
     }
+}
+
+@Composable
+private fun SelectionBar(onCopy: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shadowElevation = 3.dp,
+    ) {
+        TextButton(onClick = onCopy) { Text("コピー") }
+    }
+}
+
+private fun copyText(context: Context, text: String) {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText("", text))
 }
 
 private val scratch = RectF()
@@ -325,21 +492,22 @@ private fun drawBox(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) 
     }
 }
 
-private fun drawText(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) {
-    val font = page.list.fonts.getOrNull(op.fo) ?: return
-    if (op.co !in page.colors.indices) return
+/** 文字の位置を測るときも同じ設定を通す。falseなら描かない行 */
+internal fun textPaint(paint: Paint, page: VectorPage, op: DrawOp): Boolean {
+    val font = page.list.fonts.getOrNull(op.fo) ?: return false
+    if (op.co !in page.colors.indices) return false
     val size = font[0]
-    val weight = font.getOrElse(1) { 400f }.toInt()
-    val italic = font.getOrElse(2) { 0f } > 0f
-    val family = font.getOrElse(3) { 0f }.toInt()
     val letterSpacing = font.getOrElse(4) { 0f }
-    val ascent = font.getOrElse(5) { size * 0.8f }
 
     paint.reset()
     paint.isAntiAlias = true
     paint.color = page.colors[op.co]
     paint.textSize = size
-    paint.typeface = typefaceOf(family, weight, italic)
+    paint.typeface = typefaceOf(
+        family = font.getOrElse(3) { 0f }.toInt(),
+        weight = font.getOrElse(1) { 400f }.toInt(),
+        italic = font.getOrElse(2) { 0f } > 0f,
+    )
     paint.letterSpacing = if (size > 0f) letterSpacing / size else 0f
     paint.isUnderlineText = op.u == 1
     // 書体が違えば同じ文字列でも幅が違う。行幅へ詰めて右端を合わせる
@@ -348,6 +516,13 @@ private fun drawText(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp)
         val measured = paint.measureText(op.s)
         if (measured > 0f) paint.textScaleX = (target / measured).coerceIn(0.5f, 1.6f)
     }
+    return true
+}
+
+private fun drawText(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) {
+    if (!textPaint(paint, page, op)) return
+    val font = page.list.fonts[op.fo]
+    val ascent = font.getOrElse(5) { font[0] * 0.8f }
     canvas.drawText(op.s, op.b[0], op.b[1] + ascent, paint)
 }
 
