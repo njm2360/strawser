@@ -37,9 +37,10 @@ export type ClientMsg =
   | { type: "selectTab"; tabId: string }
   | { type: "tap"; x: number; y: number } // ページ座標（pageWidth基準）
   | { type: "longPress"; x: number; y: number }
-  // ローカルスクロール位置通知（300msスロットル）。live中はpageIdを空にする。
-  // 遷移直後は前のページ向けの通知が遅れて届くので、サーバーはpageIdで宛先を確かめる
-  | { type: "scrollPos"; pageId: string; y: number }
+  // ローカルスクロール位置通知（300msスロットル）。idは宛先で、pageモードはpageId、
+  // vectorモードはlistId、live中は空。
+  // 遷移直後は前のページ向けの通知が遅れて届くので、サーバーはこれで宛先を確かめる
+  | { type: "scrollPos"; id: string; y: number }
   | { type: "insertText"; text: string } // IME 確定文字列
   | { type: "key"; key: "Enter" | "Backspace" }
   | { type: "setMode"; mode: Mode }

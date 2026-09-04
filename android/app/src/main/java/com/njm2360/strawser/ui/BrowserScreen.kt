@@ -125,6 +125,7 @@ fun BrowserScreen(
                     tiles = state.tiles,
                     onActivate = state::activate,
                     onRequestAssets = state::requestAssets,
+                    onScrollPos = state::scrollTo,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),

@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -34,6 +35,7 @@ import com.njm2360.strawser.net.DrawOp
 import com.njm2360.strawser.net.ServerMsg
 import com.njm2360.strawser.net.TileStore
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
 import kotlin.math.max
 
 // 描画コマンドをy座標で束ねる幅
@@ -145,6 +147,7 @@ internal fun VectorPageView(
     tiles: TileStore,
     onActivate: (nodeId: Int, x: Double, y: Double) -> Unit,
     onRequestAssets: (List<Int>) -> Unit,
+    onScrollPos: (listId: String, y: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (page == null) {
@@ -173,6 +176,17 @@ internal fun VectorPageView(
                 wanted.clear()
                 request(batch)
             }
+        }
+
+        // 読んでいる位置をサーバーへ通知する。無限スクロールの継ぎ足しの判定に使う
+        val report by rememberUpdatedState(onScrollPos)
+        LaunchedEffect(page) {
+            snapshotFlow { scrollY }
+                .conflate()
+                .collect { y ->
+                    report(page.listId, (y / scale).toInt())
+                    delay(300)
+                }
         }
 
         val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }

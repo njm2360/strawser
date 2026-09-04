@@ -402,6 +402,7 @@ async function beginPage(
 interface CurrentList {
   listId: string;
   viewKey: string;
+  scrollY: number; // クライアントのローカルスクロール位置（ページ座標）
   // クライアントが持っている表示リスト。次の差分の土台
   list: DisplayList;
   // nodeIdから送信済み画像のhash
@@ -512,7 +513,9 @@ async function extractOnce(): Promise<void> {
     send(diff);
     return;
   }
-  setCurrentList({ listId, viewKey: key, list: snap.list, assets: new Map(), background });
+  // 表を置き直せず丸ごと送るときも、クライアントは同じ文書なら位置を保つ
+  const scrollY = base?.scrollY ?? 0;
+  setCurrentList({ listId, viewKey: key, scrollY, list: snap.list, assets: new Map(), background });
   send(full);
 }
 
@@ -577,6 +580,51 @@ async function pumpAssets(): Promise<void> {
     console.error("asset capture failed:", e);
   } finally {
     pumpingAssets = false;
+  }
+}
+
+// 無限スクロールと遅延読み込みの継ぎ足し。表示リストは文書全体を写すので、
+// 伸びるかどうかは実ページ次第
+
+// 伸びないページで実ページのスクロールを繰り返さないための間隔
+const VECTOR_PROBE_MS = 1500;
+
+let extendingVector = false;
+let lastVectorProbe = 0;
+
+// 表示リストのfullHeightと同じ測り方。Page.getLayoutMetricsとは端数が合わない
+const documentHeight = (): Promise<number> =>
+  getActiveTab().page.evaluate(() => Math.ceil(document.documentElement.scrollHeight));
+
+async function maybeExtendVector(): Promise<void> {
+  const list = currentList;
+  if (!list || extendingVector || extracting || pageLoading || mode !== "vector") return;
+  const view = getViewport();
+  if (list.scrollY + view.height * 1.5 < list.list.fullHeight) return;
+  const now = Date.now();
+  if (now - lastVectorProbe < VECTOR_PROBE_MS) return;
+  lastVectorProbe = now;
+  extendingVector = true;
+  const gen = navGen;
+  try {
+    const tab = getActiveTab();
+    if (list.viewKey !== (await viewKey(tab))) return;
+    const before = list.list.fullHeight;
+    await tab.page.evaluate((y) => window.scrollTo(0, y), list.scrollY).catch(() => {});
+    await tab.page.waitForTimeout(300);
+    const height = await documentHeight();
+    if (currentList !== list || pageLoading || gen !== navGen) return;
+    if (height <= before) return;
+    // 一巡させるのは2画面ぶんまで。青天井にすると、無限スクロールのサイトでは
+    // 一巡しているあいだにさらに伸びて止まらなくなる
+    await triggerLazyLoad(before, Math.min(height, before + view.height * 2));
+    if (currentList !== list || pageLoading || gen !== navGen) return;
+    console.log(`vector extend ${list.viewKey}: ${before} -> ${height}`);
+    await extractAndSend();
+  } catch (e) {
+    console.error("vector extend failed:", e);
+  } finally {
+    extendingVector = false;
   }
 }
 
@@ -1006,8 +1054,14 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
         }
         break;
       }
+      if (mode === "vector") {
+        if (msg.id !== currentList?.listId) break;
+        currentList.scrollY = msg.y;
+        void maybeExtendVector();
+        break;
+      }
       // 遷移直後は前のページ向けの通知が遅れて届く
-      if (!current || msg.pageId !== current.pageId) break;
+      if (!current || msg.id !== current.pageId) break;
       current.scrollY = msg.y; // 送信キューの優先順位とpageExtendの判定に使う
       void maybeExtend();
       break;

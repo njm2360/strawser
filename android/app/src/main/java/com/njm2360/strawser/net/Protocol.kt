@@ -78,10 +78,11 @@ sealed interface ClientMsg {
     data class LongPress(val x: Double, val y: Double) : ClientMsg
 
     // ローカルスクロール位置通知（300msスロットル、ページ座標）。
-    // ライブモード中は「実ページをこの位置へスクロールせよ」の意味になり、pageIdは空になる
+    // idは宛先で、pageモードはpageId、vectorモードはlistId。
+    // ライブモード中は「実ページをこの位置へスクロールせよ」の意味になり、idは空になる
     @Serializable
     @SerialName("scrollPos")
-    data class ScrollPos(val pageId: String, val y: Int) : ClientMsg
+    data class ScrollPos(val id: String, val y: Int) : ClientMsg
 
     // IME で確定した文字列をまとめて送る
     @Serializable

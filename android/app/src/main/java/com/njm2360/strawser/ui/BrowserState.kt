@@ -205,9 +205,9 @@ internal class BrowserState(
 
     fun longPress(x: Double, y: Double) = client.send(ClientMsg.LongPress(x, y))
 
-    fun scrollTo(pageId: String, y: Int) = client.send(ClientMsg.ScrollPos(pageId, y))
+    fun scrollTo(id: String, y: Int) = client.send(ClientMsg.ScrollPos(id, y))
 
-    /** ライブモードは実ページを動かすのでpageIdを持たない */
+    /** ライブモードは実ページを動かすので宛先を持たない */
     fun liveScrollTo(y: Int) = client.send(ClientMsg.ScrollPos("", y))
 
     fun requestTile(index: Int) = client.send(ClientMsg.RequestTiles(listOf(index)))
