@@ -65,24 +65,50 @@ function freshRects(nodeIds: number[]): Promise<AssetRect[]> {
 
 const BAND_HEIGHT = 4096; // 1回のスクリーンショットで覆う高さ（ページ座標）
 
-// 背景として撮るあいだ中身を隠す。文字がラスタへ焼き付くと、上に描き直す文字と二重になる
-async function maskContents(nodeIds: number[], on: boolean): Promise<void> {
+// 切り抜きは実ページの撮り直しなので、矩形に重なるものが一緒に焼き付き、opとしても
+// 描かれて二重になる。撮るあいだだけ対象の血縁でないものを隠す。
+// 背景として撮るものは半透明のことがあり、下に敷かれた絵まで消えるので触らない
+// （cookpadのカードはグラデーション越しに写真が見える）
+async function isolate(nodeIds: number[], asBackground: boolean, on: boolean): Promise<void> {
   const { page } = getActivePage();
   await page
     .evaluate(
-      ({ ids, on }: { ids: number[]; on: boolean }) => {
-        const store = (window as unknown as { __strawserNodes?: Map<number, Element> })
-          .__strawserNodes;
-        for (const id of ids) {
-          const el = store?.get(id);
-          if (!el) continue;
-          if (on) el.setAttribute("data-sw-bg", "");
-          else el.removeAttribute("data-sw-bg");
+      ({ ids, asBackground, on }: { ids: number[]; asBackground: boolean; on: boolean }) => {
+        for (const el of document.querySelectorAll("[data-sw-bg],[data-sw-over]")) {
+          el.removeAttribute("data-sw-bg");
+          el.removeAttribute("data-sw-over");
         }
         let style = document.getElementById("__strawserMask");
         if (!on) {
           style?.remove();
           return;
+        }
+        const store = (window as unknown as { __strawserNodes?: Map<number, Element> })
+          .__strawserNodes;
+        const targets: Element[] = [];
+        for (const id of ids) {
+          const el = store?.get(id);
+          if (el) targets.push(el);
+        }
+        if (asBackground) {
+          for (const el of targets) el.setAttribute("data-sw-bg", "");
+        } else {
+          // 祖先を隠すと対象ごと消え、子孫は絵の一部
+          const kin = new Set<Element>();
+          for (const el of targets) {
+            for (let p: Element | null = el; p; p = p.parentElement) kin.add(p);
+            for (const d of el.querySelectorAll("*")) kin.add(d);
+          }
+          const boxes = targets.map((el) => el.getBoundingClientRect());
+          for (const el of document.body.querySelectorAll("*")) {
+            if (kin.has(el)) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width < 1 || r.height < 1) continue;
+            const hit = boxes.some(
+              (b) => r.right > b.left && r.left < b.right && r.bottom > b.top && r.top < b.bottom,
+            );
+            if (hit) el.setAttribute("data-sw-over", "");
+          }
         }
         if (!style) {
           style = document.createElement("style");
@@ -92,11 +118,11 @@ async function maskContents(nodeIds: number[], on: boolean): Promise<void> {
         // 直下のテキストノードは子孫セレクタで掴めないので、色を抜いて消す。
         // 背景と、色を自前で持つ擬似要素は残る
         style.textContent =
-          "[data-sw-bg] * { visibility: hidden !important }" +
+          "[data-sw-over], [data-sw-bg] * { visibility: hidden !important }" +
           "[data-sw-bg] { color: transparent !important;" +
           " -webkit-text-fill-color: transparent !important; text-shadow: none !important }";
       },
-      { ids: nodeIds, on },
+      { ids: nodeIds, asBackground, on },
     )
     .catch(() => {});
 }
@@ -123,17 +149,10 @@ export async function captureAssets(
     for (const asBackground of [false, true]) {
       const group = list.filter((r) => background.has(r.nodeId) === asBackground);
       if (group.length === 0) continue;
-      if (asBackground)
-        await maskContents(
-          group.map((r) => r.nodeId),
-          true,
-        );
+      const ids = group.map((r) => r.nodeId);
+      await isolate(ids, asBackground, true);
       await encodeBand(out, baseY, pageWidth, scale, group);
-      if (asBackground)
-        await maskContents(
-          group.map((r) => r.nodeId),
-          false,
-        );
+      await isolate(ids, asBackground, false);
     }
   }
   return out;
