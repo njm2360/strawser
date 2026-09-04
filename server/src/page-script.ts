@@ -366,6 +366,10 @@ export function walkPage(): Extraction {
 
   const CONTENT_TEXT = /^"(.*)"$/s;
 
+  // アイコン書体が字を割り当てる私用領域。面15と16は全域が私用領域なので代理対も見る。
+  // 書体を置き換えて描くと豆腐になる
+  const PUA = /[\ue000-\uf8ff]|[\udb80-\udbff][\udc00-\udfff]/;
+
   // 戻り値は「この要素ごとラスタにしないと再現できない」か
   const emitPseudo = (el: Element, kind: string, parent: Rect, ctx: Ctx): boolean => {
     const cs = getComputedStyle(el, kind);
@@ -379,11 +383,12 @@ export function walkPage(): Extraction {
       alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
     };
     const r = pseudoRect(cs, parent);
+    const text = CONTENT_TEXT.exec(content)?.[1];
+    if (text !== undefined && PUA.test(text)) return true;
     // 流れの中に置かれた擬似要素は位置を起こせない
-    if (!r) return cs.backgroundImage !== "none" || !CONTENT_TEXT.test(content);
+    if (!r) return cs.backgroundImage !== "none" || text === undefined;
     if (cs.backgroundImage !== "none") return true;
     emitBox(cs, r, inner);
-    const text = CONTENT_TEXT.exec(content)?.[1];
     if (text && text.trim()) emitLine(cs, r, text, inner);
     return false;
   };
