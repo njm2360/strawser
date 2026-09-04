@@ -95,7 +95,7 @@ sealed interface ClientMsg {
 
     @Serializable
     @SerialName("setMode")
-    data class SetMode(val mode: String) : ClientMsg // "page" | "live"
+    data class SetMode(val mode: String) : ClientMsg // "page" | "live" | "vector"
 
     // ライブフレーム受信確認（これを返すまでサーバーは次フレームを送らない）
     @Serializable

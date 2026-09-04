@@ -36,6 +36,13 @@ import com.njm2360.strawser.net.ServerMsg
 
 internal val URL_BAR_HEIGHT = 52.dp
 
+// 左は/protocol/messages.tsのMode
+private val MODE_ITEMS = listOf(
+    "page" to "標準表示",
+    "vector" to "軽量表示",
+    "live" to "LIVE表示",
+)
+
 @Composable
 internal fun UrlBar(
     urlInput: String,
@@ -51,8 +58,7 @@ internal fun UrlBar(
     onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
-    onToggleLive: () -> Unit,
-    onToggleVector: () -> Unit,
+    onSelectMode: (String) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -108,18 +114,15 @@ internal fun UrlBar(
                     text = { Text("タブ一覧（$tabCount）") },
                     onClick = { menuOpen = false; onShowTabs() },
                 )
-                // 描画情報を送って端末で描く。写真以外は文字と図形なので桁違いに軽い
-                DropdownMenuItem(
-                    text = { Text(if (mode == "vector") "軽量表示をやめる" else "軽量表示") },
-                    enabled = connected,
-                    onClick = { menuOpen = false; onToggleVector() },
-                )
-                // 動画やアニメーションはタイル配信では追えないのでスクリーンキャストへ切り替える
-                DropdownMenuItem(
-                    text = { Text(if (mode == "live") "LIVE表示をやめる" else "LIVE表示") },
-                    enabled = connected,
-                    onClick = { menuOpen = false; onToggleLive() },
-                )
+                HorizontalDivider()
+                for ((value, label) in MODE_ITEMS) {
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        leadingIcon = { Text(if (mode == value) "✓" else "") },
+                        enabled = connected,
+                        onClick = { menuOpen = false; onSelectMode(value) },
+                    )
+                }
                 HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("接続設定") },

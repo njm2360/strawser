@@ -26,7 +26,7 @@ class TileStore(val byteLimit: Int) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
     }
 
-    // domモードはCanvasへ直に描くのでandroid.graphics.Bitmapが要る
+    // vectorモードはCanvasへ直に描くのでandroid.graphics.Bitmapが要る
     private val natives = object : LruCache<String, Bitmap>(bitmapLimit()) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }

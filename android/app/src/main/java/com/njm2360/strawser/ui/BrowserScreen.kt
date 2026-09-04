@@ -104,8 +104,7 @@ fun BrowserScreen(
                 onBack = state::back,
                 onForward = state::forward,
                 onReload = state::reload,
-                onToggleLive = state::toggleLive,
-                onToggleVector = state::toggleVector,
+                onSelectMode = state::selectMode,
             )
             // 読み込み中に切れるとloading falseが二度と来ない
             if (state.connected && state.navState?.loading == true) {

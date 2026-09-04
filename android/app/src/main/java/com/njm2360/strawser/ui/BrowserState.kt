@@ -233,16 +233,13 @@ internal class BrowserState(
         if (nodeIds.isNotEmpty()) client.send(ClientMsg.RequestAssets(target.listId, nodeIds))
     }
 
-    private fun switchMode(next: String) {
+    fun selectMode(next: String) {
+        if (next == mode) return
         mode = next
         if (next == "live") liveFrame = null
         if (next == "vector") vector = null
         client.send(ClientMsg.SetMode(next))
     }
-
-    fun toggleLive() = switchMode(if (mode == "live") "page" else "live")
-
-    fun toggleVector() = switchMode(if (mode == "vector") "page" else "vector")
 }
 
 @Composable
