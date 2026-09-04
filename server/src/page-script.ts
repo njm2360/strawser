@@ -540,7 +540,16 @@ export function walkPage(): Extraction {
         continue;
       }
 
-      emitBox(cs, r, inner);
+      // 行をまたぐインライン要素は矩形が行ごとに返る。まとめた1つで塗ると行間まで埋まり、
+      // 折り返した先の行が丸ごと背景色になる（MDNの<code>）
+      const fragments = cs.display === "inline" ? child.getClientRects() : undefined;
+      if (fragments !== undefined && fragments.length > 1) {
+        for (const f of fragments) {
+          emitBox(cs, { x: f.left + sx, y: f.top + sy, w: f.width, h: f.height }, inner);
+        }
+      } else {
+        emitBox(cs, r, inner);
+      }
       const iconic =
         emitPseudo(child, "::before", r, inner) || emitPseudo(child, "::after", r, inner);
       if (iconic && !hasText(child)) {
