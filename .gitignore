@@ -3,6 +3,7 @@ node_modules/
 server/config.json
 server/user-data/
 server/logs/
+server/tools/fid-*
 
 .vscode/
 .DS_Store

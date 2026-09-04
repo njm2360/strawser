@@ -13,5 +13,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["src", "../protocol"]
+  "include": ["src", "tools", "../protocol"]
 }
