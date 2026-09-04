@@ -96,6 +96,7 @@ export function walkPage(): Extraction {
   const rects: AssetRect[] = [];
   const sx = window.scrollX;
   const sy = window.scrollY;
+  const pageWidth = document.documentElement.clientWidth;
 
   const hex2 = (n: number): string => n.toString(16).padStart(2, "0");
   const colorId = (css: string, alpha: number): number => {
@@ -371,7 +372,12 @@ export function walkPage(): Extraction {
     const content = cs.content;
     if (!content || content === "none" || content === "normal") return false;
     if (cs.display === "none" || cs.visibility === "hidden") return false;
-    const inner: Ctx = { ...ctx, alpha: ctx.alpha * (Number(cs.opacity) || 1) };
+    const opacity = Number(cs.opacity);
+    if (opacity === 0) return false;
+    const inner: Ctx = {
+      ...ctx,
+      alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
+    };
     const r = pseudoRect(cs, parent);
     // 流れの中に置かれた擬似要素は位置を起こせない
     if (!r) return cs.backgroundImage !== "none" || !CONTENT_TEXT.test(content);
@@ -465,12 +471,21 @@ export function walkPage(): Extraction {
       if (SKIP.has(tag)) continue;
       const cs = getComputedStyle(child);
       if (cs.display === "none" || cs.visibility === "hidden") continue;
+      // display:contentsは箱を作らないので矩形が0x0で返る
+      if (cs.display === "contents") {
+        const through: Ctx = { ...ctx };
+        if (clickable(child, tag)) through.link = idOf(child);
+        walk(child, through, depth + 1);
+        continue;
+      }
       const opacity = Number(cs.opacity);
       if (opacity === 0) continue;
       const cr = child.getBoundingClientRect();
       if (cr.width < 0.5 && cr.height < 0.5) continue;
       const r: Rect = { x: cr.left + sx, y: cr.top + sy, w: cr.width, h: cr.height };
       if (hiddenForReaders(cs, r) || outside(r, ctx.clip)) continue;
+      // 画像が撮れないままクライアントが要求し続け、キューが詰まる
+      if (r.x >= pageWidth || r.x + r.w <= 0) continue;
 
       const inner: Ctx = {
         link: ctx.link,
@@ -552,7 +567,7 @@ export function walkPage(): Extraction {
     title: document.title,
     url: location.href,
     list: {
-      pageWidth: document.documentElement.clientWidth,
+      pageWidth,
       fullHeight: Math.ceil(document.documentElement.scrollHeight),
       bg: colorId(getComputedStyle(document.body).backgroundColor, 1),
       colors,
