@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import com.njm2360.strawser.net.DisplayList
 import com.njm2360.strawser.net.DrawOp
+import com.njm2360.strawser.net.ServerMsg
 import com.njm2360.strawser.net.TileStore
 import kotlinx.coroutines.delay
 import kotlin.math.max
@@ -43,9 +44,14 @@ private const val ASSET_BATCH_MS = 150L
 
 /**
  * 折り返しはサーバーが実測した位置で確定しているので、端末は行を置くだけでよい。
- * assetsは要求して届いた画像のhash（実体はTileStoreがhashで持つ）
+ * assetsは要求して届いた画像のhash（実体はTileStoreがhashで持つ）。
+ * scrollYはページ座標で、世代をまたいで引き継ぐ
  */
-internal class VectorPage(val listId: String, val list: DisplayList) {
+internal class VectorPage(val listId: String, val url: String, val list: DisplayList) {
+    var scrollY: Float = 0f
+
+    /** ページ内リンクでは#より後ろだけが変わる。同じ文書かはこれで比べる */
+    val documentUrl: String = url.substringBefore('#')
     val colors: IntArray = IntArray(list.colors.size) { parseColor(list.colors[it]) }
     val bgColor: Int = if (list.bg in colors.indices) colors[list.bg] else 0xFFFFFFFF.toInt()
     val assets = mutableStateMapOf<Int, String>()
@@ -71,6 +77,38 @@ internal class VectorPage(val listId: String, val list: DisplayList) {
             }
         }
         return found
+    }
+
+    /** 差分を当てた次の世代。土台の範囲が合わなければnull（丸ごと要求し直す） */
+    fun patch(msg: ServerMsg.VectorDiff): VectorPage? {
+        val ops = ArrayList<DrawOp>(list.ops.size)
+        for (chunk in msg.ops) {
+            if (chunk.n <= 0) {
+                ops.addAll(chunk.o)
+                continue
+            }
+            if (chunk.a < 0 || chunk.a + chunk.n > list.ops.size) return null
+            ops.addAll(list.ops.subList(chunk.a, chunk.a + chunk.n))
+        }
+        val next = VectorPage(
+            listId = msg.listId,
+            url = msg.url,
+            list = DisplayList(
+                pageWidth = msg.pageWidth,
+                fullHeight = msg.fullHeight,
+                bg = msg.bg,
+                colors = list.colors + msg.colors,
+                fonts = list.fonts + msg.fonts,
+                ops = ops,
+            ),
+        )
+        next.scrollY = scrollY
+        next.assets.putAll(assets)
+        // 差し込まれた画像は位置か大きさが変わっている。撮り直しを要求させる
+        for (chunk in msg.ops) {
+            for (op in chunk.o) if (op.t == 2) next.assets.remove(op.i)
+        }
+        return next
     }
 
     private companion object {
@@ -108,8 +146,10 @@ internal fun VectorPageView(
         val viewportHeightPx = constraints.maxHeight.toFloat()
         // 1 CSS px = 1 dpなので、これは端末の表示密度そのものになる
         val scale = viewportPx / page.list.pageWidth
-        var scrollY by remember(page) { mutableFloatStateOf(0f) }
         val maxScroll = max(0f, page.list.fullHeight * scale - viewportHeightPx)
+        var scrollY by remember(page) {
+            mutableFloatStateOf((page.scrollY * scale).coerceIn(0f, maxScroll))
+        }
 
         val wanted = remember(page) { mutableStateListOf<Int>() }
         val request by rememberUpdatedState(onRequestAssets)
@@ -134,6 +174,7 @@ internal fun VectorPageView(
                         val next = (scrollY - delta).coerceIn(0f, maxScroll)
                         val consumed = scrollY - next
                         scrollY = next
+                        page.scrollY = next / scale
                         consumed
                     },
                 )

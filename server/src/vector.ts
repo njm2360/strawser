@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { getActivePage, getViewport } from "./browser.ts";
 import { walkPage, type AssetRect, type Extraction } from "./page-script.ts";
+import type { DisplayList, DrawOp, OpChunk } from "./protocol.ts";
 
 export type { AssetRect, Extraction };
 
@@ -180,4 +181,98 @@ export function nodeCenter(nodeId: number): Promise<{ x: number; y: number } | u
       y: Math.round(r.top + window.scrollY + r.height / 2),
     };
   }, nodeId);
+}
+
+// 同じopなら同じ文字列になる。キーの並びは組み立てる経路で決まっていて抽出のたびに変わらない
+const sigOf = (op: DrawOp): string => JSON.stringify(op);
+
+// これより短い一致はコピー指示の方が大きい
+const MIN_RUN = 3;
+// これだけ続けば繋ぎ先として十分
+const RUN_ENOUGH = 64;
+// 同じ絵のopは何十個も並ぶ。総当たりにするとop数の2乗になる
+const CANDIDATES = 8;
+
+/** 色とフォントの表が土台の続きになっているか。違えば差分のindexが噛み合わない */
+export function extendsTables(base: DisplayList, next: DisplayList): boolean {
+  if (next.colors.length < base.colors.length || next.fonts.length < base.fonts.length) {
+    return false;
+  }
+  for (let i = 0; i < base.colors.length; i++) {
+    if (base.colors[i] !== next.colors[i]) return false;
+  }
+  for (let i = 0; i < base.fonts.length; i++) {
+    if (String(base.fonts[i]) !== String(next.fonts[i])) return false;
+  }
+  return true;
+}
+
+/** 土台のどこから引き継ぐかを組み立てる。並び替えは追えないので送り直しになる */
+export function diffOps(base: DrawOp[], next: DrawOp[]): OpChunk[] {
+  const baseSig = base.map(sigOf);
+  const nextSig = next.map(sigOf);
+  const at = new Map<string, number[]>();
+  for (let j = 0; j < baseSig.length; j++) {
+    const found = at.get(baseSig[j]!);
+    if (found) found.push(j);
+    else at.set(baseSig[j]!, [j]);
+  }
+  // listは昇順。from以降の先頭を二分探索で拾う
+  const seek = (list: number[], from: number): number => {
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid]! < from) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const runAt = (j: number, i: number): number => {
+    let n = 0;
+    while (j + n < baseSig.length && i + n < nextSig.length && baseSig[j + n] === nextSig[i + n]) {
+      n++;
+    }
+    return n;
+  };
+
+  const chunks: OpChunk[] = [];
+  let fresh: DrawOp[] = [];
+  const flush = (): void => {
+    if (fresh.length === 0) return;
+    chunks.push({ o: fresh });
+    fresh = [];
+  };
+
+  let from = 0;
+  let i = 0;
+  while (i < nextSig.length) {
+    let start = from;
+    let run = runAt(from, i);
+    // 消えたopの先で繋ぎ直す
+    if (run < MIN_RUN) {
+      const list = at.get(nextSig[i]!) ?? [];
+      const head = seek(list, from);
+      for (let k = head; k < list.length && k - head < CANDIDATES; k++) {
+        const j = list[k]!;
+        const n = runAt(j, i);
+        if (n > run) {
+          run = n;
+          start = j;
+        }
+        if (run >= RUN_ENOUGH) break;
+      }
+    }
+    if (run < MIN_RUN) {
+      fresh.push(next[i]!);
+      i++;
+      continue;
+    }
+    flush();
+    chunks.push({ a: start, n: run });
+    from = start + run;
+    i += run;
+  }
+  flush();
+  return chunks;
 }

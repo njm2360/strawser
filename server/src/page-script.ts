@@ -36,20 +36,47 @@ interface Rect {
   h: number;
 }
 
+// 同じ文書のあいだ持ち越す。nodeIdと表のindexが抽出をまたいで動くと、
+// 前に送った表示リストとの差分が取れない
+interface Carried {
+  ids: WeakMap<Element, number>;
+  nextId: number;
+  colors: string[];
+  colorIndex: Map<string, number>;
+  fonts: number[][];
+  fontIndex: Map<string, number>;
+}
+
 export function walkPage(): Extraction {
+  const w = window as unknown as {
+    __strawserVec?: Carried;
+    __strawserNodes: Map<number, Element>;
+  };
+  const carried: Carried = (w.__strawserVec ??= {
+    ids: new WeakMap(),
+    nextId: 1,
+    colors: [],
+    colorIndex: new Map(),
+    fonts: [],
+    fontIndex: new Map(),
+  });
+  // 引けるのは今そこにある要素だけ。持ち越すと外れた要素を掴み続ける
   const store = new Map<number, Element>();
-  (window as unknown as { __strawserNodes: Map<number, Element> }).__strawserNodes = store;
-  let nextId = 1;
+  w.__strawserNodes = store;
   const idOf = (el: Element): number => {
-    const id = nextId++;
+    let id = carried.ids.get(el);
+    if (id === undefined) {
+      id = carried.nextId++;
+      carried.ids.set(el, id);
+    }
     store.set(id, el);
     return id;
   };
 
-  const colors: string[] = [];
-  const colorIndex = new Map<string, number>();
-  const fonts: number[][] = [];
-  const fontIndex = new Map<string, number>();
+  const colors = carried.colors;
+  const colorIndex = carried.colorIndex;
+  const fonts = carried.fonts;
+  const fontIndex = carried.fontIndex;
   const layered: { op: DrawOp; layer: number[] }[] = [];
   const rects: AssetRect[] = [];
   const sx = window.scrollX;

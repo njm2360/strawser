@@ -46,11 +46,13 @@ export type ClientMsg =
   | { type: "liveAck" } // ライブフレーム受信確認（次フレーム送信の許可）
   // tileRefで指されたタイルが手元に無かったときの再要求。サーバーは実体を送り直す
   | { type: "requestTiles"; indices: number[] }
-  // nodeIdは抽出のたびに振り直されるので、listIdで世代を確かめること。
-  // サーバーは要素の矩形中央へタッチを注入する
+  // サーバーは要素の矩形中央へタッチを注入する。
+  // nodeIdは同じ文書のあいだ変わらないが、遷移をまたぐとlistIdで弾かれる
   | { type: "activate"; listId: string; nodeId: number }
   // 画面に入った画像の実体要求。要求されるまで送らない
-  | { type: "requestAssets"; listId: string; nodeIds: number[] };
+  | { type: "requestAssets"; listId: string; nodeIds: number[] }
+  // vectorDiffの土台が手元に無かったとき。サーバーは表示リストを丸ごと送り直す
+  | { type: "requestList" };
 
 export type Mode = "page" | "live" | "vector";
 
@@ -138,6 +140,21 @@ export type ServerMsg =
       title: string;
       list: DisplayList;
     }
+  // 直前に送った表示リストとの差分。opsは引き継ぐ区間と新しいopの並び。
+  // colorsとfontsは前の表の続きだけ（indexは積み増しなので前の分はそのまま使える）
+  | {
+      type: "vectorDiff";
+      listId: string;
+      baseId: string; // これを持っていなければrequestListで丸ごと要求する
+      url: string;
+      title: string;
+      pageWidth: number;
+      fullHeight: number;
+      bg: number;
+      colors: string[];
+      fonts: number[][];
+      ops: OpChunk[];
+    }
   // 直後のバイナリフレームが画像本体
   | {
       type: "assetHeader";
@@ -150,6 +167,13 @@ export type ServerMsg =
   // 送信済みの画像と同じバイト列。tileRefと同じくhashで引く
   | { type: "assetRef"; listId: string; nodeId: number; hash: string }
   | { type: "error"; message: string };
+
+// nが正なら土台のopsをa番目からn個そのまま使う。そうでなければoを差し込む
+export interface OpChunk {
+  a?: number;
+  n?: number;
+  o?: DrawOp[];
+}
 
 // 座標はすべてページ座標（CSS px）。文字は折り返し後の1行ずつを実測位置つきで送るので、
 // 端末側で折り返しをやり直さない。写真とアイコンだけラスタに落ちる。

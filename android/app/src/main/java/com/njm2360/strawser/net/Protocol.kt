@@ -106,7 +106,7 @@ sealed interface ClientMsg {
     @SerialName("requestTiles")
     data class RequestTiles(val indices: List<Int>) : ClientMsg
 
-    // nodeIdは抽出のたびに振り直されるので、listIdで世代を確かめること
+    // nodeIdは同じ文書のあいだ変わらないが、遷移をまたぐとlistIdで弾かれる
     @Serializable
     @SerialName("activate")
     data class Activate(val listId: String, val nodeId: Int) : ClientMsg
@@ -115,6 +115,11 @@ sealed interface ClientMsg {
     @Serializable
     @SerialName("requestAssets")
     data class RequestAssets(val listId: String, val nodeIds: List<Int>) : ClientMsg
+
+    // vectorDiffの土台が手元に無かったとき。表示リストが丸ごと届く
+    @Serializable
+    @SerialName("requestList")
+    data object RequestList : ClientMsg
 }
 
 // ---- サーバー → クライアント ----
@@ -227,6 +232,22 @@ sealed interface ServerMsg {
         val list: DisplayList,
     ) : ServerMsg
 
+    // 直前に受け取った表示リストとの差分。colorsとfontsは表の続きだけ届く
+    @Serializable
+    @SerialName("vectorDiff")
+    data class VectorDiff(
+        val listId: String,
+        val baseId: String,
+        val url: String,
+        val title: String,
+        val pageWidth: Int,
+        val fullHeight: Int,
+        val bg: Int = -1,
+        val colors: List<String> = emptyList(),
+        val fonts: List<List<Float>> = emptyList(),
+        val ops: List<OpChunk> = emptyList(),
+    ) : ServerMsg
+
     // 直後のバイナリフレームが画像本体
     @Serializable
     @SerialName("assetHeader")
@@ -262,6 +283,14 @@ data class DisplayList(
     val colors: List<String> = emptyList(),
     val fonts: List<List<Float>> = emptyList(),
     val ops: List<DrawOp> = emptyList(),
+)
+
+/** nが正なら土台のopsをa番目からn個そのまま使う。そうでなければoを差し込む */
+@Serializable
+data class OpChunk(
+    val a: Int = 0,
+    val n: Int = 0,
+    val o: List<DrawOp> = emptyList(),
 )
 
 /** tは 0=矩形 1=テキスト行 2=画像 3=入力欄（描くものは無く当たり判定だけ） */

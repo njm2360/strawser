@@ -26,7 +26,11 @@ import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.SearchEngine
 import com.njm2360.strawser.net.ClientMsg
 import com.njm2360.strawser.resolveInput
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+
+// 回転では画面幅の変更と実測幅の反映が別々に届く。先に送ると合わない幅で撮り直される
+private const val VIEWPORT_SETTLE_MS = 150L
 
 @Composable
 fun BrowserScreen(
@@ -75,6 +79,7 @@ fun BrowserScreen(
     }
 
     LaunchedEffect(state.connected, currentViewport) {
+        delay(VIEWPORT_SETTLE_MS)
         if (state.connected) state.sendViewport()
     }
 

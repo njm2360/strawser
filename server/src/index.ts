@@ -27,10 +27,10 @@ import {
   type FullPageCapture,
   type Tile,
 } from "./capture.ts";
-import { extractList, captureAssets, nodeCenter } from "./vector.ts";
+import { extractList, captureAssets, nodeCenter, diffOps, extendsTables } from "./vector.ts";
 import { tap, longPress, insertText, pressKey } from "./input.ts";
 import { loadConfig } from "./config.ts";
-import type { ClientMsg, ServerMsg, Mode } from "./protocol.ts";
+import type { ClientMsg, ServerMsg, Mode, DisplayList } from "./protocol.ts";
 
 const PORT = 8080;
 const config = loadConfig();
@@ -384,6 +384,8 @@ async function beginPage(
 
 interface CurrentList {
   listId: string;
+  // クライアントが持っている表示リスト。次の差分の土台
+  list: DisplayList;
   // nodeIdから送信済み画像のhash
   assets: Map<number, string>;
   // 背景として撮るnodeId。撮影中は子孫を隠す
@@ -392,40 +394,86 @@ interface CurrentList {
 
 let currentList: CurrentList | undefined;
 let extracting = false;
+let extractPending = false;
 
 async function extractAndSend(): Promise<void> {
-  if (extracting) return;
+  if (extracting) {
+    extractPending = true;
+    return;
+  }
   extracting = true;
   try {
-    const gen = navGen;
-    const tab = getActiveTab();
-    const snap = await extractList();
-    // 抽出中に遷移していたら、載っているのは次のページの中身
-    if (gen !== navGen) return;
-    const list: CurrentList = {
-      listId: randomUUID(),
-      assets: new Map(),
-      background: new Set(snap.rects.filter((r) => r.bg).map((r) => r.nodeId)),
-    };
-    currentList = list;
-    assetQueue.length = 0;
-    const bytes = JSON.stringify(snap.list).length;
-    console.log(
-      `vector: ${snap.list.ops.length} ops, ${snap.rects.length} images, ` +
-        `${snap.list.colors.length} colors, ${snap.list.fonts.length} fonts, ${bytes} bytes`,
-    );
-    send({
-      type: "vectorBegin",
-      listId: list.listId,
-      url: tab.page.url(),
-      title: snap.title,
-      list: snap.list,
-    });
+    do {
+      extractPending = false;
+      await extractOnce();
+    } while (extractPending);
   } catch (e) {
     console.error("extract failed:", e);
   } finally {
     extracting = false;
   }
+}
+
+// 丸ごと送るバイト数に対してこの割合を超えた差分は使わない
+const DIFF_LIMIT = 0.7;
+
+async function extractOnce(): Promise<void> {
+  const gen = navGen;
+  const tab = getActiveTab();
+  const snap = await extractList();
+  // 抽出中に遷移していたら、載っているのは次のページの中身
+  if (gen !== navGen) return;
+  const listId = randomUUID();
+  const url = tab.page.url();
+  const background = new Set(snap.rects.filter((r) => r.bg).map((r) => r.nodeId));
+  const full: ServerMsg = {
+    type: "vectorBegin",
+    listId,
+    url,
+    title: snap.title,
+    list: snap.list,
+  };
+  const fullBytes = JSON.stringify(full).length;
+  const base = currentList;
+  const diff =
+    base && extendsTables(base.list, snap.list)
+      ? ({
+          type: "vectorDiff",
+          listId,
+          baseId: base.listId,
+          url,
+          title: snap.title,
+          pageWidth: snap.list.pageWidth,
+          fullHeight: snap.list.fullHeight,
+          bg: snap.list.bg,
+          colors: snap.list.colors.slice(base.list.colors.length),
+          fonts: snap.list.fonts.slice(base.list.fonts.length),
+          ops: diffOps(base.list.ops, snap.list.ops),
+        } satisfies ServerMsg)
+      : undefined;
+  const diffBytes = diff ? JSON.stringify(diff).length : Infinity;
+  console.log(
+    `vector: ${snap.list.ops.length} ops, ${snap.rects.length} images, ` +
+      `${snap.list.colors.length} colors, ${snap.list.fonts.length} fonts, ` +
+      `${fullBytes} bytes` +
+      (diff ? ` (diff ${diffBytes})` : ""),
+  );
+  if (base && diff && diffBytes < fullBytes * DIFF_LIMIT) {
+    // 差し込まれた画像は位置か大きさが変わっている。撮り直させる
+    for (const chunk of diff.ops) {
+      for (const op of chunk.o ?? []) {
+        if (op.t === 2 && op.i !== undefined) base.assets.delete(op.i);
+      }
+    }
+    base.listId = listId;
+    base.list = snap.list;
+    base.background = background;
+    send(diff);
+    return;
+  }
+  currentList = { listId, list: snap.list, assets: new Map(), background };
+  assetQueue.length = 0;
+  send(full);
 }
 
 // captureAssetsは帯ごとに1枚撮るので、まとめて渡すほどスクリーンショットが減る
@@ -706,7 +754,11 @@ function attachTab(tab: Tab): void {
     trySendLiveFrame();
   });
 
+  // 同一ドキュメント遷移（pushState等）ではloadが来ないため、framenavigatedが張る安全弁
+  let loadingTimeout: NodeJS.Timeout | undefined;
+
   tab.page.on("load", () => {
+    clearTimeout(loadingTimeout);
     tab.url = tab.page.url();
     void tab.page
       .title()
@@ -723,7 +775,6 @@ function attachTab(tab: Tab): void {
     else if (mode === "vector") void extractAndSend();
   });
 
-  let loadingTimeout: NodeJS.Timeout | undefined;
   tab.page.on("framenavigated", (frame) => {
     if (frame !== tab.page.mainFrame()) return;
     tab.url = frame.url();
@@ -733,8 +784,7 @@ function attachTab(tab: Tab): void {
     navGen++;
     // リンクタップ等での遷移でも旧ページの未送信タイルを破棄する
     current?.pending.clear();
-    // 同一ドキュメント遷移（pushState等）ではloadが来ないため安全弁で解除する。
-    // このままでは誰も撮り直さないので、ここで撮り直す
+    // loadが来なければ誰も撮り直さないので、ここで撮り直す
     clearTimeout(loadingTimeout);
     loadingTimeout = setTimeout(() => {
       pageLoading = false;
@@ -918,6 +968,11 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       void pumpAssets();
       break;
     }
+    case "requestList":
+      if (mode !== "vector") break;
+      currentList = undefined;
+      await extractAndSend();
+      break;
     case "requestTiles":
       if (current) {
         for (const i of msg.indices) {

@@ -122,7 +122,21 @@ internal class BrowserState(
                     }
                 }
             }
-            is ServerMsg.VectorBegin -> vector = VectorPage(msg.listId, msg.list)
+            is ServerMsg.VectorBegin -> {
+                val prev = vector
+                vector = VectorPage(msg.listId, msg.url, msg.list).also {
+                    // 同じページの撮り直しでは読んでいた位置を保つ。
+                    // 折り返しが変わるので全体に対する割合で合わせる
+                    val height = prev?.list?.fullHeight ?: 0
+                    if (height > 0 && prev?.documentUrl == it.documentUrl) {
+                        it.scrollY = prev.scrollY * msg.list.fullHeight / height
+                    }
+                }
+            }
+            is ServerMsg.VectorDiff -> {
+                val patched = vector?.takeIf { it.listId == msg.baseId }?.patch(msg)
+                if (patched != null) vector = patched else client.send(ClientMsg.RequestList)
+            }
             is ServerMsg.PageExtend -> {
                 page?.takeIf { it.pageId == msg.pageId }?.let {
                     it.fullHeight = msg.newFullHeight
