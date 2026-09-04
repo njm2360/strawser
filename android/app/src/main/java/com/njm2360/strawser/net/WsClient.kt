@@ -23,6 +23,7 @@ class WsClient(
     private val viewport: () -> ClientMsg.Viewport,
     private val onMessage: (ServerMsg) -> Unit,
     private val onTile: (pageId: String, tileIndex: Int, hash: String) -> Unit,
+    private val onAsset: (listId: String, nodeId: Int, hash: String) -> Unit,
     private val onLiveFrame: (header: ServerMsg.LiveFrameHeader, bytes: ByteArray) -> Unit,
     private val onConnectionChange: (connected: Boolean) -> Unit,
     private val onAuthError: () -> Unit,
@@ -111,7 +112,10 @@ class WsClient(
                 retryCount = 0
                 onConnectionChange(true)
             }
-            if (msg is ServerMsg.TileHeader || msg is ServerMsg.LiveFrameHeader) {
+            if (msg is ServerMsg.TileHeader ||
+                msg is ServerMsg.AssetHeader ||
+                msg is ServerMsg.LiveFrameHeader
+            ) {
                 pendingHeader = msg
             }
             if (msg is ServerMsg.TileRef) {
@@ -120,6 +124,15 @@ class WsClient(
                 } else {
                     Log.i(TAG, "tile ${msg.tileIndex} cache miss (${msg.hash})")
                     send(ClientMsg.RequestTiles(listOf(msg.tileIndex)))
+                }
+                return
+            }
+            if (msg is ServerMsg.AssetRef) {
+                if (tiles.has(msg.hash)) {
+                    onAsset(msg.listId, msg.nodeId, msg.hash)
+                } else {
+                    Log.i(TAG, "asset ${msg.nodeId} cache miss (${msg.hash})")
+                    send(ClientMsg.RequestAssets(msg.listId, listOf(msg.nodeId)))
                 }
                 return
             }
@@ -155,6 +168,11 @@ class WsClient(
                     Log.d(TAG, "<- binary tile ${header.tileIndex} (${bytes.size} bytes)")
                     tiles.put(header.hash, bytes.toByteArray())
                     onTile(header.pageId, header.tileIndex, header.hash)
+                }
+                is ServerMsg.AssetHeader -> {
+                    Log.d(TAG, "<- binary asset ${header.nodeId} (${bytes.size} bytes)")
+                    tiles.put(header.hash, bytes.toByteArray())
+                    onAsset(header.listId, header.nodeId, header.hash)
                 }
                 is ServerMsg.LiveFrameHeader -> {
                     Log.d(TAG, "<- binary live frame (${bytes.size} bytes, scrollY ${header.scrollY})")

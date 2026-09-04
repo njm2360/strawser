@@ -1,5 +1,6 @@
 package com.njm2360.strawser.net
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
@@ -25,6 +26,11 @@ class TileStore(val byteLimit: Int) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
     }
 
+    // domモードはCanvasへ直に描くのでandroid.graphics.Bitmapが要る
+    private val natives = object : LruCache<String, Bitmap>(bitmapLimit()) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+
     fun put(hash: String, data: ByteArray) {
         bytes.put(hash, data)
     }
@@ -41,6 +47,15 @@ class TileStore(val byteLimit: Int) {
         val decoded = BitmapFactory.decodeByteArray(data, 0, data.size)?.asImageBitmap()
             ?: return null
         bitmaps.put(hash, decoded)
+        return decoded
+    }
+
+    /** 復号済みのandroid Bitmap。描画スレッドから呼ばれる */
+    fun raw(hash: String): Bitmap? {
+        natives.get(hash)?.let { return it }
+        val data = bytes.get(hash) ?: return null
+        val decoded = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return null
+        natives.put(hash, decoded)
         return decoded
     }
 

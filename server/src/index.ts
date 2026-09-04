@@ -27,9 +27,10 @@ import {
   type FullPageCapture,
   type Tile,
 } from "./capture.ts";
+import { extractList, captureAssets, nodeCenter, setNodeValue } from "./vector.ts";
 import { tap, longPress, insertText, pressKey } from "./input.ts";
 import { loadConfig } from "./config.ts";
-import type { ClientMsg, ServerMsg } from "./protocol.ts";
+import type { ClientMsg, ServerMsg, Mode } from "./protocol.ts";
 
 const PORT = 8080;
 const config = loadConfig();
@@ -106,7 +107,17 @@ let current: CurrentPage | undefined;
 let pumping = false;
 let pageLoading = false; // メインフレームのナビゲーション進行中か
 let navGen = 0; // ナビゲーション世代。framenavigated ごとに増える（非同期処理の失効判定用）
-let mode: "page" | "live" = "page";
+let mode: Mode = "page";
+
+// 操作の後に画面を作り直す。遷移が始まっていたらload側のやり直しに任せる
+// （レイアウト未完了ページを送って帯域を無駄にしない）。ライブ中はscreencastが映す
+function scheduleRefresh(): void {
+  setTimeout(() => {
+    if (pageLoading) return;
+    if (mode === "page") void captureAndSend();
+    else if (mode === "vector") void extractAndSend();
+  }, 600);
+}
 
 // 表示から外れたページは未符号化タイルが元PNGを掴んだままなので手放させる。
 // 戻ってきたときは差分キャプチャで撮り直して埋める
@@ -369,6 +380,90 @@ async function beginPage(
   void pumpTiles();
 }
 
+// vectorモード。ページを描画コマンドの列として送り、画像だけラスタにする
+
+interface CurrentList {
+  listId: string;
+  // nodeIdから送信済み画像のhash
+  assets: Map<number, string>;
+}
+
+let currentList: CurrentList | undefined;
+let extracting = false;
+
+async function extractAndSend(): Promise<void> {
+  if (extracting) return;
+  extracting = true;
+  try {
+    const gen = navGen;
+    const tab = getActiveTab();
+    const snap = await extractList();
+    // 抽出中に遷移していたら、載っているのは次のページの中身
+    if (gen !== navGen) return;
+    const list: CurrentList = { listId: randomUUID(), assets: new Map() };
+    currentList = list;
+    assetQueue.length = 0;
+    const bytes = JSON.stringify(snap.list).length;
+    console.log(
+      `vector: ${snap.list.ops.length} ops, ${snap.rects.length} images, ` +
+        `${snap.list.colors.length} colors, ${snap.list.fonts.length} fonts, ${bytes} bytes`,
+    );
+    send({
+      type: "vectorBegin",
+      listId: list.listId,
+      url: tab.page.url(),
+      title: snap.title,
+      list: snap.list,
+    });
+  } catch (e) {
+    console.error("extract failed:", e);
+  } finally {
+    extracting = false;
+  }
+}
+
+// captureAssetsは帯ごとに1枚撮るので、まとめて渡すほどスクリーンショットが減る
+const ASSET_BATCH = 8;
+const assetQueue: number[] = [];
+let pumpingAssets = false;
+
+async function pumpAssets(): Promise<void> {
+  if (pumpingAssets) return;
+  pumpingAssets = true;
+  try {
+    while (assetQueue.length > 0 && currentList && client?.readyState === WebSocket.OPEN) {
+      const list = currentList;
+      const ws = client;
+      const assets = await captureAssets(assetQueue.splice(0, ASSET_BATCH));
+      // 切り出しを待つ間にページが差し替わっていたら送らない
+      if (currentList !== list) break;
+      for (const asset of assets) {
+        const held = clientTiles.has(asset.hash);
+        rememberHash(asset.hash, asset.data.byteLength);
+        list.assets.set(asset.nodeId, asset.hash);
+        if (held) {
+          send({ type: "assetRef", listId: list.listId, nodeId: asset.nodeId, hash: asset.hash });
+          continue;
+        }
+        send({
+          type: "assetHeader",
+          listId: list.listId,
+          nodeId: asset.nodeId,
+          format: "webp",
+          byteLength: asset.data.byteLength,
+          hash: asset.hash,
+        });
+        console.log(`-> binary asset ${asset.nodeId} (${asset.data.byteLength} bytes)`);
+        await new Promise<void>((resolve) => ws.send(asset.data, () => resolve()));
+      }
+    }
+  } catch (e) {
+    console.error("asset capture failed:", e);
+  } finally {
+    pumpingAssets = false;
+  }
+}
+
 // ---- pageExtend: スクロールが画像末尾に近づいたら追加分を継ぎ足す ----
 
 let extending = false;
@@ -487,17 +582,25 @@ async function startScreencast(): Promise<void> {
     .catch(() => {});
 }
 
-async function switchMode(next: "page" | "live"): Promise<void> {
+async function switchMode(next: Mode): Promise<void> {
   if (next === mode) return;
   const { cdp } = getActivePage();
+  const prev = mode;
   mode = next;
-  if (next === "live") {
-    await startScreencast();
-  } else {
+  if (prev === "live") {
     await cdp.send("Page.stopScreencast").catch(() => {});
     latestLiveFrame = undefined;
-    void captureAndSend();
   }
+  if (prev === "vector") {
+    currentList = undefined;
+    assetQueue.length = 0;
+  }
+  if (next === "live") await startScreencast();
+  // vectorモードはタイルを持たない。抱えたままだと元PNGを掴み続ける
+  else if (next === "vector") {
+    setCurrent(undefined);
+    await extractAndSend();
+  } else void captureAndSend();
 }
 
 // ---- フォーカス検知（IME 表示制御） ----
@@ -579,6 +682,7 @@ async function activateTab(previous: Tab | undefined): Promise<void> {
   sendTabs();
   await sendNavState(false);
   if (mode === "live") await startScreencast();
+  else if (mode === "vector") await extractAndSend();
   else await captureAndSend();
 }
 
@@ -610,6 +714,7 @@ function attachTab(tab: Tab): void {
     void sendNavState(false);
     send({ type: "focus", kind: "none" }); // 新しいページにフォーカスは残らない
     if (mode === "page") void captureAndSend();
+    else if (mode === "vector") void extractAndSend();
   });
 
   let loadingTimeout: NodeJS.Timeout | undefined;
@@ -628,6 +733,7 @@ function attachTab(tab: Tab): void {
     loadingTimeout = setTimeout(() => {
       pageLoading = false;
       if (mode === "page") void captureAndSend();
+      else if (mode === "vector") void extractAndSend();
     }, 5000);
     void sendNavState(true);
   });
@@ -660,12 +766,12 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       setCurrent(undefined);
       await setViewport(clampViewport(msg.viewportW, msg.viewportH, msg.dpr));
       shownTabId = getActiveTabId();
-      const wasLive = mode === "live";
+      const switched = mode !== "page";
       await switchMode("page"); // クライアントUIはページモードで始まるため揃える
       sendTabs();
       await sendNavState(false);
-      // ライブから戻した場合はswitchMode内で送信済み（二重のpageBeginを避ける）
-      if (!wasLive) await captureAndSend();
+      // 他モードから戻した場合はswitchMode内で送信済み（二重のpageBeginを避ける）
+      if (!switched) await captureAndSend();
       break;
     }
     case "viewport": {
@@ -680,6 +786,9 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
         const { cdp } = getActivePage();
         await cdp.send("Page.stopScreencast").catch(() => {});
         await startScreencast();
+      } else if (mode === "vector") {
+        // 幅が変われば画像の表示寸法も変わる
+        await extractAndSend();
       } else {
         await captureAndSend();
       }
@@ -730,29 +839,21 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       // 遷移しない操作（メニュー開閉等）向けの差分再キャプチャ。
       // 遷移が始まっていたら load イベント側のフル再送に任せる
       // （レイアウト未完了ページを送って帯域を無駄にしない）。ライブ中は screencast が映す
-      setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend();
-      }, 600);
+      scheduleRefresh();
       break;
     case "longPress":
       await longPress(msg.x, msg.y);
-      setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend();
-      }, 600);
+      scheduleRefresh();
       break;
     case "insertText":
       await insertText(msg.text);
-      setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend();
-      }, 600);
+      scheduleRefresh();
       break;
     case "key":
       await pressKey(msg.key);
       // Enter はフォーム送信でフォーカスが外れることが多いので再評価する
       setTimeout(() => void sendFocusState(), 500);
-      setTimeout(() => {
-        if (!pageLoading && mode === "page") void captureAndSend();
-      }, 600);
+      scheduleRefresh();
       break;
     case "setMode":
       await switchMode(msg.mode);
@@ -787,6 +888,36 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       void maybeExtend();
       break;
     }
+    case "activate": {
+      if (mode !== "vector" || msg.listId !== currentList?.listId) break;
+      const at = await nodeCenter(msg.nodeId);
+      if (!at) break;
+      await tap(at.x, at.y);
+      setTimeout(() => void sendFocusState(), 300);
+      scheduleRefresh();
+      break;
+    }
+    case "setValue": {
+      if (mode !== "vector" || msg.listId !== currentList?.listId) break;
+      await setNodeValue(msg.nodeId, msg.text);
+      scheduleRefresh();
+      break;
+    }
+    case "requestAssets": {
+      const list = currentList;
+      if (mode !== "vector" || msg.listId !== list?.listId) break;
+      for (const nodeId of msg.nodeIds) {
+        // 一度撮ったものは撮り直さない。ただし写しから落ちているなら実体が要る
+        const hash = list.assets.get(nodeId);
+        if (hash !== undefined && clientTiles.has(hash)) {
+          send({ type: "assetRef", listId: list.listId, nodeId, hash });
+          continue;
+        }
+        if (!assetQueue.includes(nodeId)) assetQueue.push(nodeId);
+      }
+      void pumpAssets();
+      break;
+    }
     case "requestTiles":
       if (current) {
         for (const i of msg.indices) {
@@ -803,7 +934,11 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
 async function main(): Promise<void> {
   await startBrowser(attachTab);
 
-  const wss = new WebSocketServer({ port: PORT });
+  // 表示リストのJSONは圧縮で3分の1以下になる。閾値より小さいフレームは素通しする
+  const wss = new WebSocketServer({
+    port: PORT,
+    perMessageDeflate: { threshold: 2048 },
+  });
   wss.on("connection", (ws, req) => {
     const token = new URL(req.url ?? "/", "ws://localhost").searchParams.get("token");
     if (token !== config.token) {

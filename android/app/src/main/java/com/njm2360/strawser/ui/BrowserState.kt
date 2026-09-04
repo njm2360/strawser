@@ -55,7 +55,10 @@ internal class BrowserState(
         private set
     var activeTabId by mutableStateOf("")
         private set
-    var liveMode by mutableStateOf(false)
+    // "page" | "live" | "vector"
+    var mode by mutableStateOf("page")
+        private set
+    var vector by mutableStateOf<VectorPage?>(null)
         private set
     var liveFrame by mutableStateOf<ImageBitmap?>(null)
         private set
@@ -78,6 +81,10 @@ internal class BrowserState(
             val target = page ?: return@WsClient
             if (target.pageId == pageId) target.hashes[tileIndex] = hash
         },
+        onAsset = { listId, nodeId, hash ->
+            val target = vector ?: return@WsClient
+            if (target.listId == listId) target.assets[nodeId] = hash
+        },
         onLiveFrame = { header, bytes ->
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             if (bmp != null) {
@@ -90,7 +97,7 @@ internal class BrowserState(
             connected = online
             // 切断でリモート側のモードと入力フォーカスは失われる
             if (!online) {
-                liveMode = false
+                mode = "page"
                 showInput = false
             }
         },
@@ -115,6 +122,7 @@ internal class BrowserState(
                     }
                 }
             }
+            is ServerMsg.VectorBegin -> vector = VectorPage(msg.listId, msg.list)
             is ServerMsg.PageExtend -> {
                 page?.takeIf { it.pageId == msg.pageId }?.let {
                     it.fullHeight = msg.newFullHeight
@@ -178,11 +186,32 @@ internal class BrowserState(
         showInput = false
     }
 
-    fun toggleLive() {
-        liveMode = !liveMode
-        if (liveMode) liveFrame = null
-        client.send(ClientMsg.SetMode(if (liveMode) "live" else "page"))
+    fun activate(nodeId: Int) {
+        val target = vector ?: return
+        client.send(ClientMsg.Activate(target.listId, nodeId))
     }
+
+    fun setValue(nodeId: Int, text: String) {
+        val target = vector ?: return
+        client.send(ClientMsg.SetValue(target.listId, nodeId, text))
+    }
+
+    /** 画面に入った画像だけ要求する。vectorモードの画像は要求しなければ届かない */
+    fun requestAssets(nodeIds: List<Int>) {
+        val target = vector ?: return
+        if (nodeIds.isNotEmpty()) client.send(ClientMsg.RequestAssets(target.listId, nodeIds))
+    }
+
+    private fun switchMode(next: String) {
+        mode = next
+        if (next == "live") liveFrame = null
+        if (next == "vector") vector = null
+        client.send(ClientMsg.SetMode(next))
+    }
+
+    fun toggleLive() = switchMode(if (mode == "live") "page" else "live")
+
+    fun toggleVector() = switchMode(if (mode == "vector") "page" else "vector")
 }
 
 @Composable

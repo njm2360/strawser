@@ -105,6 +105,21 @@ sealed interface ClientMsg {
     @Serializable
     @SerialName("requestTiles")
     data class RequestTiles(val indices: List<Int>) : ClientMsg
+
+    // nodeIdは抽出のたびに振り直されるので、listIdで世代を確かめること
+    @Serializable
+    @SerialName("activate")
+    data class Activate(val listId: String, val nodeId: Int) : ClientMsg
+
+    // 入力欄の確定値。値ごと置き換える
+    @Serializable
+    @SerialName("setValue")
+    data class SetValue(val listId: String, val nodeId: Int, val text: String) : ClientMsg
+
+    // 画面に入った画像の実体要求。要求するまで届かない
+    @Serializable
+    @SerialName("requestAssets")
+    data class RequestAssets(val listId: String, val nodeIds: List<Int>) : ClientMsg
 }
 
 // ---- サーバー → クライアント ----
@@ -206,7 +221,67 @@ sealed interface ServerMsg {
     @SerialName("focus")
     data class Focus(val kind: String) : ServerMsg
 
+    // ページ全体の描画コマンド。文字と箱はここで出し切る。
+    // 画像は矩形だけ載っていて、実体はrequestAssetsで要求する
+    @Serializable
+    @SerialName("vectorBegin")
+    data class VectorBegin(
+        val listId: String,
+        val url: String,
+        val title: String,
+        val list: DisplayList,
+    ) : ServerMsg
+
+    // 直後のバイナリフレームが画像本体
+    @Serializable
+    @SerialName("assetHeader")
+    data class AssetHeader(
+        val listId: String,
+        val nodeId: Int,
+        val format: String,
+        val byteLength: Int,
+        val hash: String,
+    ) : ServerMsg
+
+    // 受信済みの画像と同じバイト列。tileRefと同じくhashで引く
+    @Serializable
+    @SerialName("assetRef")
+    data class AssetRef(val listId: String, val nodeId: Int, val hash: String) : ServerMsg
+
     @Serializable
     @SerialName("error")
     data class Error(val message: String) : ServerMsg
 }
+
+/**
+ * 座標はページ座標（CSS px = dp）。文字は折り返し後の1行ずつが実測位置つきで届くので、
+ * 端末側で折り返しをやり直さない。
+ *
+ * colorsは"#rrggbb"または"#rrggbbaa"、fontsは[px, weight, italic, family, letterSpacing, ascent]
+ */
+@Serializable
+data class DisplayList(
+    val pageWidth: Int,
+    val fullHeight: Int,
+    val bg: Int = -1,
+    val colors: List<String> = emptyList(),
+    val fonts: List<List<Float>> = emptyList(),
+    val ops: List<DrawOp> = emptyList(),
+)
+
+/** tは 0=矩形 1=テキスト行 2=画像 3=入力欄の枠 */
+@Serializable
+data class DrawOp(
+    val t: Int,
+    val b: List<Float>, // x, y, w, h
+    val f: Int = -1, // 塗り色
+    val k: Int = -1, // 枠線色
+    val kw: Float = 0f, // 枠線幅
+    val r: List<Float> = emptyList(), // 角丸4隅
+    val fo: Int = -1, // フォント
+    val co: Int = -1, // 文字色
+    val s: String = "", // 文字
+    val u: Int = 0, // 下線
+    val i: Int = -1, // 画像のnodeId
+    val a: Int = -1, // 押せる要素のnodeId
+)

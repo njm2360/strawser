@@ -42,10 +42,19 @@ export type ClientMsg =
   | { type: "scrollPos"; pageId: string; y: number }
   | { type: "insertText"; text: string } // IME 確定文字列
   | { type: "key"; key: "Enter" | "Backspace" }
-  | { type: "setMode"; mode: "page" | "live" } // ライブモード切替
+  | { type: "setMode"; mode: Mode }
   | { type: "liveAck" } // ライブフレーム受信確認（次フレーム送信の許可）
   // tileRefで指されたタイルが手元に無かったときの再要求。サーバーは実体を送り直す
-  | { type: "requestTiles"; indices: number[] };
+  | { type: "requestTiles"; indices: number[] }
+  // nodeIdは抽出のたびに振り直されるので、listIdで世代を確かめること。
+  // サーバーは要素の矩形中央へタッチを注入する
+  | { type: "activate"; listId: string; nodeId: number }
+  // 入力欄の確定値。値ごと置き換える
+  | { type: "setValue"; listId: string; nodeId: number; text: string }
+  // 画面に入った画像の実体要求。要求されるまで送らない
+  | { type: "requestAssets"; listId: string; nodeIds: number[] };
+
+export type Mode = "page" | "live" | "vector";
 
 // ---- サーバー → クライアント ----
 export type ServerMsg =
@@ -122,4 +131,53 @@ export type ServerMsg =
       tabs: { id: string; title: string; url: string }[];
       activeId: string;
     }
+  // ページ全体の描画コマンド。文字と箱はここで出し切る（実測で4〜14KB、圧縮後）。
+  // 画像は矩形だけ載り、実体はrequestAssetsで要求された分だけ届く
+  | {
+      type: "vectorBegin";
+      listId: string;
+      url: string;
+      title: string;
+      list: DisplayList;
+    }
+  // 直後のバイナリフレームが画像本体
+  | {
+      type: "assetHeader";
+      listId: string;
+      nodeId: number;
+      format: "webp";
+      byteLength: number;
+      hash: string;
+    }
+  // 送信済みの画像と同じバイト列。tileRefと同じくhashで引く
+  | { type: "assetRef"; listId: string; nodeId: number; hash: string }
   | { type: "error"; message: string };
+
+// 座標はすべてページ座標（CSS px）。文字は折り返し後の1行ずつを実測位置つきで送るので、
+// 端末側で折り返しをやり直さない。写真とアイコンだけラスタに落ちる。
+// 色とフォントは表に集約してindexで引く（1ページあたり実測で色14〜27種）
+
+export interface DisplayList {
+  pageWidth: number;
+  fullHeight: number;
+  bg: number; // 地の色。colorsのindex（-1なら白）
+  colors: string[]; // "#rrggbb" または "#rrggbbaa"
+  fonts: number[][]; // [px, weight, italic, family(0=sans,1=serif,2=mono), letterSpacing, ascent]
+  ops: DrawOp[];
+}
+
+// tは 0=矩形 1=テキスト行 2=画像 3=入力欄の枠
+export interface DrawOp {
+  t: 0 | 1 | 2 | 3;
+  b: number[]; // x, y, w, h
+  f?: number; // 塗り色
+  k?: number; // 枠線色
+  kw?: number; // 枠線幅
+  r?: number[]; // 角丸4隅
+  fo?: number; // フォント
+  co?: number; // 文字色
+  s?: string; // 文字
+  u?: 1; // 下線
+  i?: number; // 画像のnodeId。実体はrequestAssetsで要求する
+  a?: number; // 押せる要素のnodeId
+}

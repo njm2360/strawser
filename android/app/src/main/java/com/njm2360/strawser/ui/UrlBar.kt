@@ -42,7 +42,7 @@ internal fun UrlBar(
     onUrlChange: (String) -> Unit,
     navState: ServerMsg.NavState?,
     connected: Boolean,
-    liveMode: Boolean,
+    mode: String,
     tabCount: Int,
     onOpenSettings: () -> Unit,
     onNavigate: (String) -> Unit,
@@ -52,6 +52,7 @@ internal fun UrlBar(
     onForward: () -> Unit,
     onReload: () -> Unit,
     onToggleLive: () -> Unit,
+    onToggleVector: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -107,9 +108,15 @@ internal fun UrlBar(
                     text = { Text("タブ一覧（$tabCount）") },
                     onClick = { menuOpen = false; onShowTabs() },
                 )
+                // 描画情報を送って端末で描く。写真以外は文字と図形なので桁違いに軽い
+                DropdownMenuItem(
+                    text = { Text(if (mode == "vector") "軽量表示をやめる" else "軽量表示") },
+                    enabled = connected,
+                    onClick = { menuOpen = false; onToggleVector() },
+                )
                 // 動画やアニメーションはタイル配信では追えないのでスクリーンキャストへ切り替える
                 DropdownMenuItem(
-                    text = { Text(if (liveMode) "LIVE表示をやめる" else "LIVE表示") },
+                    text = { Text(if (mode == "live") "LIVE表示をやめる" else "LIVE表示") },
                     enabled = connected,
                     onClick = { menuOpen = false; onToggleLive() },
                 )

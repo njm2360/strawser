@@ -90,7 +90,7 @@ fun BrowserScreen(
                 onUrlChange = { state.urlInput = it },
                 navState = state.navState,
                 connected = state.connected,
-                liveMode = state.liveMode,
+                mode = state.mode,
                 tabCount = state.tabs.size,
                 onOpenSettings = onOpenSettings,
                 onNavigate = { state.navigate(resolveInput(it, searchEngine)) },
@@ -100,6 +100,7 @@ fun BrowserScreen(
                 onForward = state::forward,
                 onReload = state::reload,
                 onToggleLive = state::toggleLive,
+                onToggleVector = state::toggleVector,
             )
             // 読み込み中に切れるとloading falseが二度と来ない
             if (state.connected && state.navState?.loading == true) {
@@ -113,7 +114,17 @@ fun BrowserScreen(
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
             }
-            if (state.liveMode) {
+            if (state.mode == "vector") {
+                VectorPageView(
+                    page = state.vector,
+                    tiles = state.tiles,
+                    onActivate = state::activate,
+                    onRequestAssets = state::requestAssets,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            } else if (state.mode == "live") {
                 LiveView(
                     frame = state.liveFrame,
                     pageWidth = state.liveWidth,
