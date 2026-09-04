@@ -84,16 +84,22 @@ internal class VectorPage(
     private val bands: Map<Int, List<Int>> =
         list.ops.indices.groupBy { (list.ops[it].b[1] / BAND).toInt() }
 
-    /** 高い矩形が上の帯から垂れてくるので、band4つぶん余分に見る */
+    /**
+     * 高い矩形が上の帯から垂れてくるので、band4つぶん余分に見る。
+     * 帯ごとに拾うと表示リストの並びから外れる。重ね順はこの並びなので戻してから返す
+     */
     fun indicesIn(top: Float, bottom: Float): Sequence<Int> {
         val from = max(0, (top / BAND).toInt() - 4)
         val to = (bottom / BAND).toInt()
-        return (from..to).asSequence()
-            .flatMap { bands[it].orEmpty() }
-            .filter {
-                val op = list.ops[it]
-                op.b[1] < bottom && op.b[1] + op.b[3] > top
+        val out = ArrayList<Int>()
+        for (band in from..to) {
+            for (i in bands[band].orEmpty()) {
+                val op = list.ops[i]
+                if (op.b[1] < bottom && op.b[1] + op.b[3] > top) out.add(i)
             }
+        }
+        out.sort()
+        return out.asSequence()
     }
 
     fun opsIn(top: Float, bottom: Float): Sequence<DrawOp> =
