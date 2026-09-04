@@ -227,16 +227,18 @@ sealed interface ServerMsg {
     @SerialName("vectorBegin")
     data class VectorBegin(
         val listId: String,
+        val viewKey: String, // 履歴エントリの識別子。これを鍵に表示リストを取っておく
         val url: String,
         val title: String,
         val list: DisplayList,
     ) : ServerMsg
 
-    // 直前に受け取った表示リストとの差分。colorsとfontsは表の続きだけ届く
+    // viewKeyの表示リストとの差分。colorsとfontsは表の続きだけ届く
     @Serializable
     @SerialName("vectorDiff")
     data class VectorDiff(
         val listId: String,
+        val viewKey: String,
         val baseId: String,
         val url: String,
         val title: String,
@@ -285,11 +287,15 @@ data class DisplayList(
     val ops: List<DrawOp> = emptyList(),
 )
 
-/** nが正なら土台のopsをa番目からn個そのまま使う。そうでなければoを差し込む */
+/**
+ * nが正なら土台のopsをa番目からn個、yをdyだけずらして使う。そうでなければoを差し込む。
+ * 同じページでも訪れ直すと版面の高さが0.5px以下動くことがあり、その下は全部ずれる
+ */
 @Serializable
 data class OpChunk(
     val a: Int = 0,
     val n: Int = 0,
+    val dy: Float = 0f,
     val o: List<DrawOp> = emptyList(),
 )
 

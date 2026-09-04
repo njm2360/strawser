@@ -33,6 +33,9 @@ internal class RemotePage(
     val hashes = mutableStateMapOf<Int, String>()
 }
 
+// 1つあたり1〜2MB。サーバーも同じ鍵・同じ上限・同じ捨て方で持つ
+private const val VECTOR_CACHE_LIMIT = 6
+
 /** 各プロパティはWsClientの受信スレッドから書き換わる */
 internal class BrowserState(
     serverUrl: String,
@@ -42,6 +45,9 @@ internal class BrowserState(
 ) {
     // 接続を張り直してもタイルは持ち越す
     val tiles = TileStore(tileCacheBytes)
+
+    // 履歴エントリ単位の表示リスト。戻る・進む・タブ切替はこれを土台に差分で届く。挿入順がLRU
+    private val vectors = LinkedHashMap<String, VectorPage>()
 
     var page by mutableStateOf<RemotePage?>(null)
         private set
@@ -123,19 +129,25 @@ internal class BrowserState(
                 }
             }
             is ServerMsg.VectorBegin -> {
-                val prev = vector
-                vector = VectorPage(msg.listId, msg.url, msg.list).also {
-                    // 同じページの撮り直しでは読んでいた位置を保つ。
-                    // 折り返しが変わるので全体に対する割合で合わせる
-                    val height = prev?.list?.fullHeight ?: 0
-                    if (height > 0 && prev?.documentUrl == it.documentUrl) {
-                        it.scrollY = prev.scrollY * msg.list.fullHeight / height
-                    }
+                val prev = vectors[msg.viewKey] ?: vector
+                val next = VectorPage(msg.listId, msg.viewKey, msg.url, msg.list)
+                // 同じページの撮り直しでは読んでいた位置を保つ。
+                // 折り返しが変わるので全体に対する割合で合わせる
+                val height = prev?.list?.fullHeight ?: 0
+                if (prev != null && height > 0 && prev.documentUrl == next.documentUrl) {
+                    next.scrollY = prev.scrollY * msg.list.fullHeight / height
                 }
+                vector = next
+                cacheVector(next)
             }
             is ServerMsg.VectorDiff -> {
-                val patched = vector?.takeIf { it.listId == msg.baseId }?.patch(msg)
-                if (patched != null) vector = patched else client.send(ClientMsg.RequestList)
+                val patched = vectors[msg.viewKey]?.takeIf { it.listId == msg.baseId }?.patch(msg)
+                if (patched == null) {
+                    client.send(ClientMsg.RequestList)
+                } else {
+                    vector = patched
+                    cacheVector(patched)
+                }
             }
             is ServerMsg.PageExtend -> {
                 page?.takeIf { it.pageId == msg.pageId }?.let {
@@ -156,6 +168,16 @@ internal class BrowserState(
             is ServerMsg.Focus -> showInput = msg.kind == "text"
             is ServerMsg.Error -> errorText = msg.message
             else -> {}
+        }
+    }
+
+    /** サーバーと同じ順で捨てる。表示中のものだけは残す */
+    private fun cacheVector(page: VectorPage) {
+        vectors.remove(page.viewKey)
+        vectors[page.viewKey] = page
+        val oldest = vectors.values.iterator()
+        while (vectors.size > VECTOR_CACHE_LIMIT && oldest.hasNext()) {
+            if (oldest.next() !== vector) oldest.remove()
         }
     }
 

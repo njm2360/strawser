@@ -47,7 +47,12 @@ private const val ASSET_BATCH_MS = 150L
  * assetsは要求して届いた画像のhash（実体はTileStoreがhashで持つ）。
  * scrollYはページ座標で、世代をまたいで引き継ぐ
  */
-internal class VectorPage(val listId: String, val url: String, val list: DisplayList) {
+internal class VectorPage(
+    val listId: String,
+    val viewKey: String,
+    val url: String,
+    val list: DisplayList,
+) {
     var scrollY: Float = 0f
 
     /** ページ内リンクでは#より後ろだけが変わる。同じ文書かはこれで比べる */
@@ -88,10 +93,12 @@ internal class VectorPage(val listId: String, val url: String, val list: Display
                 continue
             }
             if (chunk.a < 0 || chunk.a + chunk.n > list.ops.size) return null
-            ops.addAll(list.ops.subList(chunk.a, chunk.a + chunk.n))
+            val run = list.ops.subList(chunk.a, chunk.a + chunk.n)
+            if (chunk.dy == 0f) ops.addAll(run) else run.mapTo(ops) { it.shiftY(chunk.dy) }
         }
         val next = VectorPage(
             listId = msg.listId,
+            viewKey = msg.viewKey,
             url = msg.url,
             list = DisplayList(
                 pageWidth = msg.pageWidth,
@@ -112,6 +119,11 @@ internal class VectorPage(val listId: String, val url: String, val list: Display
     }
 
     private companion object {
+        fun DrawOp.shiftY(dy: Float): DrawOp = copy(
+            b = listOf(b[0], b[1] + dy, b[2], b[3]),
+            cl = if (cl.size == 4) listOf(cl[0], cl[1] + dy, cl[2], cl[3]) else cl,
+        )
+
         fun parseColor(s: String): Int {
             val hex = s.removePrefix("#")
             return when (hex.length) {

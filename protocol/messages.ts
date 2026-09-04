@@ -136,15 +136,17 @@ export type ServerMsg =
   | {
       type: "vectorBegin";
       listId: string;
+      viewKey: string; // 履歴エントリの識別子。クライアントはこれを鍵に表示リストを取っておく
       url: string;
       title: string;
       list: DisplayList;
     }
-  // 直前に送った表示リストとの差分。opsは引き継ぐ区間と新しいopの並び。
+  // viewKeyの表示リストとの差分。opsは引き継ぐ区間と新しいopの並び。
   // colorsとfontsは前の表の続きだけ（indexは積み増しなので前の分はそのまま使える）
   | {
       type: "vectorDiff";
       listId: string;
+      viewKey: string;
       baseId: string; // これを持っていなければrequestListで丸ごと要求する
       url: string;
       title: string;
@@ -168,10 +170,12 @@ export type ServerMsg =
   | { type: "assetRef"; listId: string; nodeId: number; hash: string }
   | { type: "error"; message: string };
 
-// nが正なら土台のopsをa番目からn個そのまま使う。そうでなければoを差し込む
+// nが正なら土台のopsをa番目からn個、yをdyだけずらして使う。そうでなければoを差し込む。
+// 同じページでも訪れ直すと版面の高さが0.5px以下動くことがあり、その下は全部ずれる
 export interface OpChunk {
   a?: number;
   n?: number;
+  dy?: number;
   o?: DrawOp[];
 }
 

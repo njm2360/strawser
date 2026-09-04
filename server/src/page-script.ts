@@ -47,6 +47,21 @@ interface Carried {
   fontIndex: Map<string, number>;
 }
 
+// 戻る・進むでは文書ごと作り直されて表が消える。前に撮ったときの表を置き直してから歩く。
+// indexが1つでもずれると全opの署名が変わって差分が取れない
+export function seedTables(seed: { colors: string[]; fonts: number[][] }): void {
+  const w = window as unknown as { __strawserVec?: Carried };
+  if (w.__strawserVec) return; // 生きている表の方が新しい
+  w.__strawserVec = {
+    ids: new WeakMap(),
+    nextId: 1,
+    colors: seed.colors.slice(),
+    colorIndex: new Map(seed.colors.map((c, i) => [c, i])),
+    fonts: seed.fonts.map((f) => f.slice()),
+    fontIndex: new Map(seed.fonts.map((f, i) => [f.slice(0, 5).join("/"), i])),
+  };
+}
+
 export function walkPage(): Extraction {
   const w = window as unknown as {
     __strawserVec?: Carried;

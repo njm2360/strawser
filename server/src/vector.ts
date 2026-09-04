@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { getActivePage, getViewport } from "./browser.ts";
-import { walkPage, type AssetRect, type Extraction } from "./page-script.ts";
+import { walkPage, seedTables, type AssetRect, type Extraction } from "./page-script.ts";
 import type { DisplayList, DrawOp, OpChunk } from "./protocol.ts";
 
 export type { AssetRect, Extraction };
@@ -15,9 +15,21 @@ const ASSET_QUALITY = 35;
 // ここは文字列で渡す（式そのものが__nameで包まれると自分を呼びに行って落ちる）
 const NAME_SHIM = "window.__name = window.__name || function (f) { return f; }";
 
-export async function extractList(): Promise<Extraction> {
+// 戻る・進むの直後はloadが来てもまだ載っていない枝がある（Wikipediaで7264opsが375opsになる）。
+// 表に出ていないタブではrAFが来ないので300msで打ち切る。
+// ページ内で評価するので外の値は掴めない（page-script.tsと同じ）
+const settle = (): Promise<void> =>
+  new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    setTimeout(resolve, 300);
+  });
+
+/** baseはこの場所で前に撮ったリスト。文書が作り直されていれば表を置き直してから歩く */
+export async function extractList(base?: DisplayList): Promise<Extraction> {
   const { page } = getActivePage();
   await page.evaluate(NAME_SHIM);
+  if (base) await page.evaluate(seedTables, { colors: base.colors, fonts: base.fonts });
+  await page.evaluate(settle).catch(() => {});
   return page.evaluate(walkPage);
 }
 
@@ -183,8 +195,17 @@ export function nodeCenter(nodeId: number): Promise<{ x: number; y: number } | u
   }, nodeId);
 }
 
+// 座標と同じ0.1pxの刻みへ戻す
+const round = (v: number): number => Math.round(v * 10) / 10;
+
+// yを抜いた署名。切り取り枠はop自身のyからの距離で持つので、区間ごとずらしても崩れない。
 // 同じopなら同じ文字列になる。キーの並びは組み立てる経路で決まっていて抽出のたびに変わらない
-const sigOf = (op: DrawOp): string => JSON.stringify(op);
+const sigOf = (op: DrawOp): string =>
+  JSON.stringify({
+    ...op,
+    b: [op.b[0], 0, op.b[2], op.b[3]],
+    cl: op.cl && [op.cl[0], round(op.cl[1]! - op.b[1]!), op.cl[2], op.cl[3]],
+  });
 
 // これより短い一致はコピー指示の方が大きい
 const MIN_RUN = 3;
@@ -211,6 +232,8 @@ export function extendsTables(base: DisplayList, next: DisplayList): boolean {
 export function diffOps(base: DrawOp[], next: DrawOp[]): OpChunk[] {
   const baseSig = base.map(sigOf);
   const nextSig = next.map(sigOf);
+  const baseY = base.map((op) => op.b[1] ?? 0);
+  const nextY = next.map((op) => op.b[1] ?? 0);
   const at = new Map<string, number[]>();
   for (let j = 0; j < baseSig.length; j++) {
     const found = at.get(baseSig[j]!);
@@ -228,12 +251,22 @@ export function diffOps(base: DrawOp[], next: DrawOp[]): OpChunk[] {
     }
     return lo;
   };
-  const runAt = (j: number, i: number): number => {
+  // 縦のずれが一定であるあいだが1区間
+  const runAt = (j: number, i: number): { n: number; dy: number } => {
+    if (j >= baseSig.length || i >= nextSig.length || baseSig[j] !== nextSig[i]) {
+      return { n: 0, dy: 0 };
+    }
+    const dy = round(nextY[i]! - baseY[j]!);
     let n = 0;
-    while (j + n < baseSig.length && i + n < nextSig.length && baseSig[j + n] === nextSig[i + n]) {
+    while (
+      j + n < baseSig.length &&
+      i + n < nextSig.length &&
+      baseSig[j + n] === nextSig[i + n] &&
+      round(nextY[i + n]! - baseY[j + n]!) === dy
+    ) {
       n++;
     }
-    return n;
+    return { n, dy };
   };
 
   const chunks: OpChunk[] = [];
@@ -248,16 +281,17 @@ export function diffOps(base: DrawOp[], next: DrawOp[]): OpChunk[] {
   let i = 0;
   while (i < nextSig.length) {
     let start = from;
-    let run = runAt(from, i);
+    let { n: run, dy } = runAt(from, i);
     // 消えたopの先で繋ぎ直す
     if (run < MIN_RUN) {
       const list = at.get(nextSig[i]!) ?? [];
       const head = seek(list, from);
       for (let k = head; k < list.length && k - head < CANDIDATES; k++) {
         const j = list[k]!;
-        const n = runAt(j, i);
-        if (n > run) {
-          run = n;
+        const found = runAt(j, i);
+        if (found.n > run) {
+          run = found.n;
+          dy = found.dy;
           start = j;
         }
         if (run >= RUN_ENOUGH) break;
@@ -269,7 +303,7 @@ export function diffOps(base: DrawOp[], next: DrawOp[]): OpChunk[] {
       continue;
     }
     flush();
-    chunks.push({ a: start, n: run });
+    chunks.push(dy === 0 ? { a: start, n: run } : { a: start, n: run, dy });
     from = start + run;
     i += run;
   }

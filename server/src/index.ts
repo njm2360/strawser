@@ -119,6 +119,21 @@ function scheduleRefresh(): void {
   }, 600);
 }
 
+// loadの時点ではまだ載っていない枝があり、版面も0.5pxほど揺れる
+const SETTLE_REFRESH_MS = 600;
+
+// 前に見た場所ならそのリストをそのまま出しておく。
+// つなぎのあいだnodeIdは実ページと対応していないので、タップと画像要求は当たらない
+async function extractLoaded(): Promise<void> {
+  const tab = getActiveTab();
+  const cached = lists.get(await viewKey(tab));
+  if (cached) restoreList(cached, tab);
+  else await extractAndSend();
+  setTimeout(() => {
+    if (!pageLoading && mode === "vector") void extractAndSend();
+  }, SETTLE_REFRESH_MS);
+}
+
 // 表示から外れたページは未符号化タイルが元PNGを掴んだままなので手放させる。
 // 戻ってきたときは差分キャプチャで撮り直して埋める
 function setCurrent(next: CurrentPage | undefined): void {
@@ -232,10 +247,12 @@ async function captureAndSend(): Promise<void> {
   void maybeExtend();
 }
 
-// 履歴エントリごとに1つ。戻る・進むでは同じ鍵に戻ってくる
+// 履歴エントリごとに1つ。戻る・進むでは同じ鍵に戻ってくる。
+// 履歴が引けないときは、別々のページが同じ鍵に収まらないよう毎回違う鍵にする
 async function viewKey(tab: Tab): Promise<string> {
   const hist = await tab.cdp.send("Page.getNavigationHistory").catch(() => undefined);
-  return `${tab.id}:${hist?.entries[hist.currentIndex]?.id ?? 0}`;
+  const entry = hist?.entries[hist.currentIndex]?.id;
+  return `${tab.id}:${entry ?? randomUUID()}`;
 }
 
 // 差分キャプチャの基準にできるページか。タイルの刻みが合わなければindexの意味が変わる
@@ -384,6 +401,7 @@ async function beginPage(
 
 interface CurrentList {
   listId: string;
+  viewKey: string;
   // クライアントが持っている表示リスト。次の差分の土台
   list: DisplayList;
   // nodeIdから送信済み画像のhash
@@ -392,9 +410,27 @@ interface CurrentList {
   background: Set<number>;
 }
 
+// 履歴エントリ単位の表示リスト。戻る・進む・タブ切替はここを土台に差分で済む。
+// クライアントも同じ鍵・同じ上限・同じ捨て方で持つ（食い違えばrequestListで戻る）。
+// 1つあたりサーバーで数百KB、クライアントで1〜2MB
+const LIST_CACHE_LIMIT = 6;
+const lists = new Map<string, CurrentList>(); // 挿入順がLRU
+
 let currentList: CurrentList | undefined;
 let extracting = false;
 let extractPending = false;
+
+// 表示中のエントリが変わったら、前のエントリ向けの画像要求は宛先を失う
+function setCurrentList(next: CurrentList): void {
+  if (currentList !== next) assetQueue.length = 0;
+  currentList = next;
+  lists.delete(next.viewKey); // 再挿入して最近使った順にする
+  lists.set(next.viewKey, next);
+  for (const [key, old] of lists) {
+    if (lists.size <= LIST_CACHE_LIMIT) break;
+    if (old !== currentList) lists.delete(key);
+  }
+}
 
 async function extractAndSend(): Promise<void> {
   if (extracting) {
@@ -420,7 +456,10 @@ const DIFF_LIMIT = 0.7;
 async function extractOnce(): Promise<void> {
   const gen = navGen;
   const tab = getActiveTab();
-  const snap = await extractList();
+  const key = await viewKey(tab);
+  // 送るのは撮り直したリストなので、nodeIdと実ページの対応は保たれる
+  const base = lists.get(key);
+  const snap = await extractList(base?.list);
   // 抽出中に遷移していたら、載っているのは次のページの中身
   if (gen !== navGen) return;
   const listId = randomUUID();
@@ -429,17 +468,18 @@ async function extractOnce(): Promise<void> {
   const full: ServerMsg = {
     type: "vectorBegin",
     listId,
+    viewKey: key,
     url,
     title: snap.title,
     list: snap.list,
   };
   const fullBytes = JSON.stringify(full).length;
-  const base = currentList;
   const diff =
     base && extendsTables(base.list, snap.list)
       ? ({
           type: "vectorDiff",
           listId,
+          viewKey: key,
           baseId: base.listId,
           url,
           title: snap.title,
@@ -453,7 +493,7 @@ async function extractOnce(): Promise<void> {
       : undefined;
   const diffBytes = diff ? JSON.stringify(diff).length : Infinity;
   console.log(
-    `vector: ${snap.list.ops.length} ops, ${snap.rects.length} images, ` +
+    `vector ${key}: ${snap.list.ops.length} ops, ${snap.rects.length} images, ` +
       `${snap.list.colors.length} colors, ${snap.list.fonts.length} fonts, ` +
       `${fullBytes} bytes` +
       (diff ? ` (diff ${diffBytes})` : ""),
@@ -468,12 +508,34 @@ async function extractOnce(): Promise<void> {
     base.listId = listId;
     base.list = snap.list;
     base.background = background;
+    setCurrentList(base);
     send(diff);
     return;
   }
-  currentList = { listId, list: snap.list, assets: new Map(), background };
-  assetQueue.length = 0;
+  setCurrentList({ listId, viewKey: key, list: snap.list, assets: new Map(), background });
   send(full);
+}
+
+/** 撮らずに前のリストを引き継がせる */
+function restoreList(entry: CurrentList, tab: Tab): void {
+  const listId = randomUUID();
+  console.log(`restore ${entry.viewKey}: ${entry.list.ops.length} ops kept`);
+  send({
+    type: "vectorDiff",
+    listId,
+    viewKey: entry.viewKey,
+    baseId: entry.listId,
+    url: tab.page.url(),
+    title: tab.title,
+    pageWidth: entry.list.pageWidth,
+    fullHeight: entry.list.fullHeight,
+    bg: entry.list.bg,
+    colors: [],
+    fonts: [],
+    ops: [{ a: 0, n: entry.list.ops.length }],
+  });
+  entry.listId = listId;
+  setCurrentList(entry);
 }
 
 // captureAssetsは帯ごとに1枚撮るので、まとめて渡すほどスクリーンショットが減る
@@ -772,7 +834,7 @@ function attachTab(tab: Tab): void {
     void sendNavState(false);
     send({ type: "focus", kind: "none" }); // 新しいページにフォーカスは残らない
     if (mode === "page") void captureAndSend();
-    else if (mode === "vector") void extractAndSend();
+    else if (mode === "vector") void extractLoaded();
   });
 
   tab.page.on("framenavigated", (frame) => {
@@ -789,7 +851,7 @@ function attachTab(tab: Tab): void {
     loadingTimeout = setTimeout(() => {
       pageLoading = false;
       if (mode === "page") void captureAndSend();
-      else if (mode === "vector") void extractAndSend();
+      else if (mode === "vector") void extractLoaded();
     }, 5000);
     void sendNavState(true);
   });
@@ -799,6 +861,10 @@ function attachTab(tab: Tab): void {
     for (const [key, cached] of pages) {
       if (cached.viewKey.startsWith(`${tab.id}:`)) pages.delete(key);
     }
+    for (const key of lists.keys()) {
+      if (key.startsWith(`${tab.id}:`)) lists.delete(key);
+    }
+    if (currentList?.viewKey.startsWith(`${tab.id}:`)) currentList = undefined;
     sendTabs();
     if (getActiveTabId() !== shownTabId) void activateTab(undefined);
   });
@@ -814,6 +880,8 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
         clientCacheId = msg.cacheId;
         clientTiles.clear();
         clientCacheUsed = 0;
+        lists.clear();
+        currentList = undefined;
       }
       clientCacheLimit = Number.isFinite(msg.cacheBytes)
         ? Math.min(Math.max(msg.cacheBytes, 1 << 20), 1 << 28)
@@ -970,6 +1038,8 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
     }
     case "requestList":
       if (mode !== "vector") break;
+      // 手元と食い違っている土台。捨てて丸ごと送り直す
+      if (currentList) lists.delete(currentList.viewKey);
       currentList = undefined;
       await extractAndSend();
       break;
