@@ -169,15 +169,37 @@ function restoreList(entry: CurrentList, tab: Tab): void {
 // loadの時点ではまだ載っていない枝があり、版面も0.5pxほど揺れる
 const SETTLE_REFRESH_MS = 600;
 
+// 表示リストのfullHeightと同じ測り方。Page.getLayoutMetricsとは端数が合わない
+const documentHeight = (): Promise<number> =>
+  getActiveTab().page.evaluate(() => Math.ceil(document.documentElement.scrollHeight));
+
+// loadの数秒後に流し込まれて版面が伸びる枝がある（GoogleのAI概要）
+const GROW_WATCH_MS = 1000;
+const GROW_WATCH_TICKS = 8;
+
+async function watchGrowth(key: string): Promise<void> {
+  let last = await documentHeight().catch(() => 0);
+  for (let i = 0; i < GROW_WATCH_TICKS; i++) {
+    await new Promise((resolve) => setTimeout(resolve, GROW_WATCH_MS));
+    if (mode !== "vector" || pageLoading || currentList?.viewKey !== key) return;
+    const height = await documentHeight().catch(() => last);
+    if (height === last) continue;
+    last = height;
+    await extractAndSend();
+  }
+}
+
 // 前に見た場所ならそのリストをそのまま出しておく。
 // つなぎのあいだnodeIdは実ページと対応していないので、タップと画像要求は当たらない
 export async function extractLoaded(): Promise<void> {
   const tab = getActiveTab();
-  const cached = lists.get(await viewKey(tab));
+  const key = await viewKey(tab);
+  const cached = lists.get(key);
   if (cached) restoreList(cached, tab);
   else await extractAndSend();
   setTimeout(() => {
-    if (!pageLoading && mode === "vector") void extractAndSend();
+    if (pageLoading || mode !== "vector") return;
+    void extractAndSend().then(() => watchGrowth(key));
   }, SETTLE_REFRESH_MS);
 }
 
@@ -249,10 +271,6 @@ const VECTOR_PROBE_MS = 1500;
 
 let extendingVector = false;
 let lastVectorProbe = 0;
-
-// 表示リストのfullHeightと同じ測り方。Page.getLayoutMetricsとは端数が合わない
-const documentHeight = (): Promise<number> =>
-  getActiveTab().page.evaluate(() => Math.ceil(document.documentElement.scrollHeight));
 
 export async function maybeExtendVector(): Promise<void> {
   const list = currentList;
