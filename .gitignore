@@ -2,6 +2,7 @@ node_modules/
 
 server/config.json
 server/user-data/
+server/user-data-fidelity/
 server/logs/
 server/tools/fid-*
 

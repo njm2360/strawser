@@ -6,6 +6,7 @@ import sharp from "sharp";
 import zlib from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
+import { emulationOptions } from "../src/browser.ts";
 import { walkPage } from "../src/page-script.ts";
 import type { DisplayList } from "../../protocol/messages.ts";
 
@@ -28,12 +29,19 @@ function toSvg(dl: DisplayList, height: number, assets: Map<number, string>): st
     `<svg xmlns="http://www.w3.org/2000/svg" width="${dl.pageWidth}" height="${height}">`,
     `<rect width="100%" height="100%" fill="${dl.bg >= 0 ? dl.colors[dl.bg] : "#fff"}"/>`,
   ];
-  for (const op of dl.ops) {
+  // basic-shapeのclip-pathはSVG要素だとbboxが基準になる
+  const defs: string[] = [];
+  for (const [n, op] of dl.ops.entries()) {
     const [x, y, w, h] = op.b as [number, number, number, number];
     if (y > height) continue;
-    const clip = op.cl
-      ? ` clip-path="polygon(${op.cl[0]}px ${op.cl[1]}px, ${op.cl[0]! + op.cl[2]!}px ${op.cl[1]}px, ${op.cl[0]! + op.cl[2]!}px ${op.cl[1]! + op.cl[3]!}px, ${op.cl[0]}px ${op.cl[1]! + op.cl[3]!}px)"`
-      : "";
+    let clip = "";
+    if (op.cl) {
+      defs.push(
+        `<clipPath id="c${n}" clipPathUnits="userSpaceOnUse">` +
+          `<rect x="${op.cl[0]}" y="${op.cl[1]}" width="${op.cl[2]}" height="${op.cl[3]}"/></clipPath>`,
+      );
+      clip = ` clip-path="url(#c${n})"`;
+    }
     if (op.t === 0) {
       const fill = op.f !== undefined ? dl.colors[op.f] : "none";
       const stroke =
@@ -41,9 +49,11 @@ function toSvg(dl: DisplayList, height: number, assets: Map<number, string>): st
       const rx = op.r ? ` rx="${op.r[0]}"` : "";
       if (op.sh) {
         const [dx, dy, blur, col] = op.sh as [number, number, number, number];
+        defs.push(
+          `<filter id="s${n}"><feDropShadow dx="${dx}" dy="${dy}" stdDeviation="${blur / 2}" flood-color="${dl.colors[col]}"/></filter>`,
+        );
         out.push(
-          `<filter id="s${x}_${y}"><feDropShadow dx="${dx}" dy="${dy}" stdDeviation="${blur / 2}" flood-color="${dl.colors[col]}"/></filter>` +
-            `<rect x="${x}" y="${y}" width="${w}" height="${h}"${rx} fill="${fill === "none" ? "#fff" : fill}" filter="url(#s${x}_${y})"/>`,
+          `<rect x="${x}" y="${y}" width="${w}" height="${h}"${rx} fill="${fill === "none" ? "#fff" : fill}" filter="url(#s${n})"/>`,
         );
       }
       out.push(
@@ -70,6 +80,7 @@ function toSvg(dl: DisplayList, height: number, assets: Map<number, string>): st
     }
   }
   out.push("</svg>");
+  out.splice(1, 0, `<defs>${defs.join("")}</defs>`);
   return out.join("");
 }
 
@@ -176,19 +187,15 @@ const TARGETS: Record<string, string> = {
 const picked = process.argv.slice(2).filter((a) => a in TARGETS);
 const names = picked.length ? picked : Object.keys(TARGETS);
 
-const browser = await chromium.launch({ channel: "chromium" });
+// user-data/はサーバーが動いていると掴まれていて開けない
+const options = await emulationOptions({ width: WIDTH, height: HEIGHT });
 for (const name of names) {
+  const context = await chromium.launchPersistentContext(
+    path.join(dir, "..", "user-data-fidelity"),
+    options,
+  );
   try {
-    const context = await browser.newContext({
-      viewport: { width: WIDTH, height: HEIGHT },
-      deviceScaleFactor: SCALE,
-      isMobile: true,
-      hasTouch: true,
-      userAgent:
-        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36",
-      locale: "ja-JP",
-    });
-    const page = await context.newPage();
+    const page = context.pages()[0] ?? (await context.newPage());
     const cdp = await context.newCDPSession(page);
     await page.goto(TARGETS[name]!, { waitUntil: "load", timeout: 45000 });
     await page.waitForTimeout(1500);
@@ -233,9 +240,9 @@ for (const name of names) {
       `${name.padEnd(10)} 構造差 ${(ds * 100).toFixed(1)}% 画素差 ${(d * 100).toFixed(1)}% | ${kinds} | ops ${String(snap.list.ops.length).padStart(5)} ` +
         `| vec ${kb(deflate(json)).padStart(6)}KB + img ${kb(bytes).padStart(6)}KB vs tile ${kb(tiles).padStart(7)}KB | ${ms}ms`,
     );
-    await context.close();
   } catch (e) {
     console.error(`${name}: ${String(e).slice(0, 160)}`);
+  } finally {
+    await context.close();
   }
 }
-await browser.close();
