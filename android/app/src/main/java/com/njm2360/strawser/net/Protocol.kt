@@ -306,7 +306,7 @@ data class OpChunk(
     val o: List<DrawOp> = emptyList(),
 )
 
-/** tは 0=矩形 1=テキスト行 2=画像 3=入力欄（描くものは無く当たり判定だけ） */
+/** tは 0=矩形 1=テキスト行 2=画像 3=当たり判定（描くものは無い。押せる要素と入力欄に置く） */
 @Serializable
 data class DrawOp(
     val t: Int,

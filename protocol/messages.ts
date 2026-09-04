@@ -194,7 +194,7 @@ export interface DisplayList {
   ops: DrawOp[];
 }
 
-// tは 0=矩形 1=テキスト行 2=画像 3=入力欄（描くものは無く当たり判定だけ）
+// tは 0=矩形 1=テキスト行 2=画像 3=当たり判定（描くものは無い。押せる要素と入力欄に置く）
 export interface DrawOp {
   t: 0 | 1 | 2 | 3;
   b: number[]; // x, y, w, h
