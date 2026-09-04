@@ -111,11 +111,6 @@ sealed interface ClientMsg {
     @SerialName("activate")
     data class Activate(val listId: String, val nodeId: Int) : ClientMsg
 
-    // 入力欄の確定値。値ごと置き換える
-    @Serializable
-    @SerialName("setValue")
-    data class SetValue(val listId: String, val nodeId: Int, val text: String) : ClientMsg
-
     // 画面に入った画像の実体要求。要求するまで届かない
     @Serializable
     @SerialName("requestAssets")
@@ -269,7 +264,7 @@ data class DisplayList(
     val ops: List<DrawOp> = emptyList(),
 )
 
-/** tは 0=矩形 1=テキスト行 2=画像 3=入力欄の枠 */
+/** tは 0=矩形 1=テキスト行 2=画像 3=入力欄（描くものは無く当たり判定だけ） */
 @Serializable
 data class DrawOp(
     val t: Int,
@@ -284,4 +279,6 @@ data class DrawOp(
     val u: Int = 0, // 下線
     val i: Int = -1, // 画像のnodeId
     val a: Int = -1, // 押せる要素のnodeId
+    val sh: List<Float> = emptyList(), // 影。dx/dy/ぼかし/色
+    val cl: List<Float> = emptyList(), // 切り取り枠。x/y/w/h
 )

@@ -49,8 +49,6 @@ export type ClientMsg =
   // nodeIdは抽出のたびに振り直されるので、listIdで世代を確かめること。
   // サーバーは要素の矩形中央へタッチを注入する
   | { type: "activate"; listId: string; nodeId: number }
-  // 入力欄の確定値。値ごと置き換える
-  | { type: "setValue"; listId: string; nodeId: number; text: string }
   // 画面に入った画像の実体要求。要求されるまで送らない
   | { type: "requestAssets"; listId: string; nodeIds: number[] };
 
@@ -166,7 +164,7 @@ export interface DisplayList {
   ops: DrawOp[];
 }
 
-// tは 0=矩形 1=テキスト行 2=画像 3=入力欄の枠
+// tは 0=矩形 1=テキスト行 2=画像 3=入力欄（描くものは無く当たり判定だけ）
 export interface DrawOp {
   t: 0 | 1 | 2 | 3;
   b: number[]; // x, y, w, h
@@ -180,4 +178,6 @@ export interface DrawOp {
   u?: 1; // 下線
   i?: number; // 画像のnodeId。実体はrequestAssetsで要求する
   a?: number; // 押せる要素のnodeId
+  sh?: number[]; // 影。dx/dy/ぼかし/色
+  cl?: number[]; // 切り取り枠。x/y/w/h。overflowで切れる分だけ載る
 }

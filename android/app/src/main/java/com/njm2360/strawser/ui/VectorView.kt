@@ -151,6 +151,12 @@ internal fun VectorPageView(
             canvas.translate(0f, -scrollY)
             canvas.scale(scale, scale)
             for (op in page.opsIn(top, bottom)) {
+                // overflowで切れる分はサーバーが枠を載せてくる
+                val clipped = op.cl.size == 4
+                if (clipped) {
+                    canvas.save()
+                    canvas.clipRect(op.cl[0], op.cl[1], op.cl[0] + op.cl[2], op.cl[1] + op.cl[3])
+                }
                 when (op.t) {
                     0 -> drawBox(canvas, paint, page, op)
                     1 -> drawText(canvas, paint, page, op)
@@ -166,14 +172,8 @@ internal fun VectorPageView(
                             canvas.drawRect(rectOf(op), paint)
                         }
                     }
-                    3 -> {
-                        paint.reset()
-                        paint.style = Paint.Style.STROKE
-                        paint.strokeWidth = 1f
-                        paint.color = 0x33000000
-                        canvas.drawRect(rectOf(op), paint)
-                    }
                 }
+                if (clipped) canvas.restore()
             }
             canvas.restore()
         }
@@ -189,6 +189,22 @@ private fun rectOf(op: DrawOp): RectF {
 
 private fun drawBox(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) {
     val radius = op.r.maxOrNull() ?: 0f
+    // 影は落とす形の不透明度から作られるので、塗りが無ければ出しようがない
+    if (op.sh.size == 4 && op.f in page.colors.indices && op.sh[3].toInt() in page.colors.indices) {
+        paint.reset()
+        paint.isAntiAlias = true
+        paint.color = page.colors[op.f]
+        // ぼかし0はsetShadowLayerが受け付けない
+        paint.setShadowLayer(
+            op.sh[2].coerceAtLeast(0.1f),
+            op.sh[0],
+            op.sh[1],
+            page.colors[op.sh[3].toInt()],
+        )
+        val r = rectOf(op)
+        if (radius > 0f) canvas.drawRoundRect(r, radius, radius, paint) else canvas.drawRect(r, paint)
+        paint.clearShadowLayer()
+    }
     if (op.f in page.colors.indices) {
         paint.reset()
         paint.isAntiAlias = true

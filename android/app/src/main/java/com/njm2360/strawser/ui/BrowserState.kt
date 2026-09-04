@@ -191,11 +191,6 @@ internal class BrowserState(
         client.send(ClientMsg.Activate(target.listId, nodeId))
     }
 
-    fun setValue(nodeId: Int, text: String) {
-        val target = vector ?: return
-        client.send(ClientMsg.SetValue(target.listId, nodeId, text))
-    }
-
     /** 画面に入った画像だけ要求する。vectorモードの画像は要求しなければ届かない */
     fun requestAssets(nodeIds: List<Int>) {
         val target = vector ?: return

@@ -27,7 +27,7 @@ import {
   type FullPageCapture,
   type Tile,
 } from "./capture.ts";
-import { extractList, captureAssets, nodeCenter, setNodeValue } from "./vector.ts";
+import { extractList, captureAssets, nodeCenter } from "./vector.ts";
 import { tap, longPress, insertText, pressKey } from "./input.ts";
 import { loadConfig } from "./config.ts";
 import type { ClientMsg, ServerMsg, Mode } from "./protocol.ts";
@@ -386,6 +386,8 @@ interface CurrentList {
   listId: string;
   // nodeIdから送信済み画像のhash
   assets: Map<number, string>;
+  // 背景として撮るnodeId。撮影中は子孫を隠す
+  background: Set<number>;
 }
 
 let currentList: CurrentList | undefined;
@@ -400,7 +402,11 @@ async function extractAndSend(): Promise<void> {
     const snap = await extractList();
     // 抽出中に遷移していたら、載っているのは次のページの中身
     if (gen !== navGen) return;
-    const list: CurrentList = { listId: randomUUID(), assets: new Map() };
+    const list: CurrentList = {
+      listId: randomUUID(),
+      assets: new Map(),
+      background: new Set(snap.rects.filter((r) => r.bg).map((r) => r.nodeId)),
+    };
     currentList = list;
     assetQueue.length = 0;
     const bytes = JSON.stringify(snap.list).length;
@@ -434,7 +440,7 @@ async function pumpAssets(): Promise<void> {
     while (assetQueue.length > 0 && currentList && client?.readyState === WebSocket.OPEN) {
       const list = currentList;
       const ws = client;
-      const assets = await captureAssets(assetQueue.splice(0, ASSET_BATCH));
+      const assets = await captureAssets(assetQueue.splice(0, ASSET_BATCH), list.background);
       // 切り出しを待つ間にページが差し替わっていたら送らない
       if (currentList !== list) break;
       for (const asset of assets) {
@@ -894,12 +900,6 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       if (!at) break;
       await tap(at.x, at.y);
       setTimeout(() => void sendFocusState(), 300);
-      scheduleRefresh();
-      break;
-    }
-    case "setValue": {
-      if (mode !== "vector" || msg.listId !== currentList?.listId) break;
-      await setNodeValue(msg.nodeId, msg.text);
       scheduleRefresh();
       break;
     }
