@@ -65,8 +65,8 @@ function freshRects(nodeIds: number[]): Promise<AssetRect[]> {
 
 const BAND_HEIGHT = 4096; // 1回のスクリーンショットで覆う高さ（ページ座標）
 
-// 背景として撮るあいだ子孫を隠す。文字がラスタへ焼き付くと、上に描き直す文字と二重になる
-async function maskDescendants(nodeIds: number[], on: boolean): Promise<void> {
+// 背景として撮るあいだ中身を隠す。文字がラスタへ焼き付くと、上に描き直す文字と二重になる
+async function maskContents(nodeIds: number[], on: boolean): Promise<void> {
   const { page } = getActivePage();
   await page
     .evaluate(
@@ -89,7 +89,12 @@ async function maskDescendants(nodeIds: number[], on: boolean): Promise<void> {
           style.id = "__strawserMask";
           document.head.appendChild(style);
         }
-        style.textContent = "[data-sw-bg] * { visibility: hidden !important }";
+        // 直下のテキストノードは子孫セレクタで掴めないので、色を抜いて消す。
+        // 背景と、色を自前で持つ擬似要素は残る
+        style.textContent =
+          "[data-sw-bg] * { visibility: hidden !important }" +
+          "[data-sw-bg] { color: transparent !important;" +
+          " -webkit-text-fill-color: transparent !important; text-shadow: none !important }";
       },
       { ids: nodeIds, on },
     )
@@ -119,13 +124,13 @@ export async function captureAssets(
       const group = list.filter((r) => background.has(r.nodeId) === asBackground);
       if (group.length === 0) continue;
       if (asBackground)
-        await maskDescendants(
+        await maskContents(
           group.map((r) => r.nodeId),
           true,
         );
       await encodeBand(out, baseY, pageWidth, scale, group);
       if (asBackground)
-        await maskDescendants(
+        await maskContents(
           group.map((r) => r.nodeId),
           false,
         );
