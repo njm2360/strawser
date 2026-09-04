@@ -549,7 +549,10 @@ export function walkPage(): Extraction {
         if (shown) {
           const size = parseFloat(cs.fontSize);
           const fo = fontId(cs); // measureのフォントもここで揃う
-          const left = parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth);
+          // 欄の外へ押し出して字を隠す書き方（Amazonの検索ボタンはアイコンだけ見せる）。
+          // 位置さえ合わせれば欄のclipで消える。%指定は解決前の値が返るので使わない
+          const indent = cs.textIndent.endsWith("px") ? parseFloat(cs.textIndent) : 0;
+          const left = parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth) + indent;
           const line = {
             x: r.x + (Number.isFinite(left) ? left : 6),
             y: r.y + (r.h - size * 1.2) / 2,
