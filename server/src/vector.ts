@@ -16,11 +16,24 @@ const ASSET_QUALITY = 35;
 const NAME_SHIM = "window.__name = window.__name || function (f) { return f; }";
 
 // 戻る・進むの直後はloadが来てもまだ載っていない枝がある（Wikipediaで7264opsが375opsになる）。
+// 走っている遷移は終端へ飛ばす。待つと無限に回るスピナーで止まり、待たないと
+// 薄いまま・ずれたまま焼き付く（2秒のフェードは撮り直しの600msでもまだ0.31）。
 // 表に出ていないタブではrAFが来ないので300msで打ち切る。
 // ページ内で評価するので外の値は掴めない（page-script.tsと同じ）
 const settle = (): Promise<void> =>
   new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        for (const animation of document.getAnimations()) {
+          try {
+            animation.finish();
+          } catch {
+            // 終わりのないものはfinishが投げる
+          }
+        }
+        requestAnimationFrame(() => resolve());
+      }),
+    );
     setTimeout(resolve, 300);
   });
 
