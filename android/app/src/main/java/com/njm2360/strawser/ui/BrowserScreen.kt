@@ -179,5 +179,8 @@ fun BrowserScreen(
                 onDismiss = { showTabs = false },
             )
         }
+        state.dialog?.let { dialog ->
+            PageDialog(dialog = dialog, onAnswer = state::answerDialog)
+        }
     }
 }

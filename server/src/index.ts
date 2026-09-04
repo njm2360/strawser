@@ -1,6 +1,7 @@
 import { WebSocketServer } from "ws";
 import { startBrowser, stopBrowser } from "./browser.ts";
 import { loadConfig } from "./config.ts";
+import { dismissDialogs } from "./dialogs.ts";
 import { handleMsg } from "./handlers.ts";
 import { setLiveFrameInFlight } from "./modes/live.ts";
 import { attachTab } from "./tabs.ts";
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
     });
 
     ws.on("close", () => {
+      dismissDialogs();
       if (client === ws) setClient(undefined);
       console.log("client disconnected");
     });

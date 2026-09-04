@@ -1,4 +1,5 @@
 import { getViewport, getActiveTab, getActiveTabId, type Tab } from "./browser.ts";
+import { showDialog } from "./dialogs.ts";
 import { startScreencast, pushLiveFrame } from "./modes/live.ts";
 import { setCurrent, captureAndSend, current, pages } from "./modes/page.ts";
 import {
@@ -49,6 +50,8 @@ export function attachTab(tab: Tab): void {
     if (tab.id !== getActiveTabId()) return;
     pushLiveFrame(Buffer.from(params.data, "base64"), Math.round(params.metadata.scrollOffsetY));
   });
+
+  tab.page.on("dialog", showDialog);
 
   // 同一ドキュメント遷移（pushState等）ではloadが来ないため、framenavigatedが張る安全弁
   let loadingTimeout: NodeJS.Timeout | undefined;

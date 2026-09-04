@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,6 +77,10 @@ internal class BrowserState(
     var showInput by mutableStateOf(false)
         private set
 
+    private val dialogs = mutableStateListOf<ServerMsg.Dialog>()
+    val dialog: ServerMsg.Dialog?
+        get() = dialogs.firstOrNull()
+
     // navStateが届くたびに上書きされる。編集中でも同じなので、入力とページ遷移が競ると打ち消される
     var urlInput by mutableStateOf("")
 
@@ -106,6 +111,8 @@ internal class BrowserState(
             if (!online) {
                 mode = "page"
                 showInput = false
+                // 開いていたダイアログはサーバーが切断時にdismissする
+                dialogs.clear()
             }
         },
         onAuthError = onAuthError,
@@ -167,6 +174,7 @@ internal class BrowserState(
                 activeTabId = msg.activeId
             }
             is ServerMsg.Focus -> showInput = msg.kind == "text"
+            is ServerMsg.Dialog -> dialogs.add(msg)
             is ServerMsg.Error -> errorText = msg.message
             else -> {}
         }
@@ -221,6 +229,11 @@ internal class BrowserState(
 
     fun closeInput() {
         showInput = false
+    }
+
+    fun answerDialog(accept: Boolean, text: String) {
+        val target = dialogs.removeFirstOrNull() ?: return
+        client.send(ClientMsg.DialogResult(target.id, accept, text))
     }
 
     fun activate(nodeId: Int, x: Double, y: Double) {

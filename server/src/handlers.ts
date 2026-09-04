@@ -17,6 +17,7 @@ import {
   resetClientTiles,
   setClientCacheLimit,
 } from "./clientCache.ts";
+import { answerDialog } from "./dialogs.ts";
 import { tap, longPress, insertText, pressKey } from "./input.ts";
 import {
   startScreencast,
@@ -126,6 +127,10 @@ export async function handleMsg(msg: ClientMsg): Promise<void> {
       current?.pending.clear();
       await sendNavState(true);
       await page.goto(msg.url, { waitUntil: "load", timeout: 30_000 }).catch((e) => {
+        // 遷移しなかったのでloadは来ない
+        void sendNavState(false);
+        // beforeunloadでの引き止めと、別の遷移への差し替えはERR_ABORTEDになる
+        if (String(e).includes("ERR_ABORTED")) return;
         send({
           type: "error",
           message: stripAnsi(`navigate failed: ${String(e)}`),
@@ -252,6 +257,9 @@ export async function handleMsg(msg: ClientMsg): Promise<void> {
       if (currentList) lists.delete(currentList.viewKey);
       clearCurrentList();
       await extractAndSend();
+      break;
+    case "dialogResult":
+      answerDialog(msg.id, msg.accept, msg.text);
       break;
     case "requestTiles":
       if (current) {

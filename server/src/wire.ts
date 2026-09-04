@@ -11,11 +11,12 @@ export function setClient(next: WebSocket | undefined): void {
 // Playwright のエラー文字列には ANSI エスケープが混ざるため除去してから送る
 export const stripAnsi = (s: string): string => s.replace(/\u001b?\[[0-9;]*m/g, "");
 
-export function send(msg: ServerMsg): void {
-  if (client?.readyState === WebSocket.OPEN) {
-    console.log(`-> ${msg.type}`);
-    client.send(JSON.stringify(msg));
-  } else {
+export function send(msg: ServerMsg): boolean {
+  if (client?.readyState !== WebSocket.OPEN) {
     console.log(`-> ${msg.type} (dropped: no client)`);
+    return false;
   }
+  console.log(`-> ${msg.type}`);
+  client.send(JSON.stringify(msg));
+  return true;
 }

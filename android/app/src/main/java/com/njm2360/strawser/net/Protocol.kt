@@ -132,6 +132,15 @@ sealed interface ClientMsg {
     @Serializable
     @SerialName("requestList")
     data object RequestList : ClientMsg
+
+    // textはpromptの入力
+    @Serializable
+    @SerialName("dialogResult")
+    data class DialogResult(
+        val id: String,
+        val accept: Boolean,
+        val text: String = "",
+    ) : ClientMsg
 }
 
 // ---- サーバー → クライアント ----
@@ -277,6 +286,16 @@ sealed interface ServerMsg {
     @Serializable
     @SerialName("assetRef")
     data class AssetRef(val listId: String, val nodeId: Int, val hash: String) : ServerMsg
+
+    // 答えを返すまでそのタブのJSは止まったまま
+    @Serializable
+    @SerialName("dialog")
+    data class Dialog(
+        val id: String,
+        val kind: String, // "alert" | "confirm" | "prompt" | "beforeunload"
+        val message: String = "",
+        val defaultValue: String = "",
+    ) : ServerMsg
 
     @Serializable
     @SerialName("error")

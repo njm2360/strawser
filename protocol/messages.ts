@@ -55,7 +55,9 @@ export type ClientMsg =
   // rawは手元でバイト列を失ったとき。assetRefで返されても絵は戻らないので実体を送り直す
   | { type: "requestAssets"; listId: string; nodeIds: number[]; raw?: boolean }
   // vectorDiffの土台が手元に無かったとき。サーバーは表示リストを丸ごと送り直す
-  | { type: "requestList" };
+  | { type: "requestList" }
+  // textはpromptの入力
+  | { type: "dialogResult"; id: string; accept: boolean; text: string };
 
 export type Mode = "page" | "live" | "vector";
 
@@ -171,6 +173,14 @@ export type ServerMsg =
     }
   // 送信済みの画像と同じバイト列。tileRefと同じくhashで引く
   | { type: "assetRef"; listId: string; nodeId: number; hash: string }
+  // 答えが返るまでそのタブのJSは止まったまま
+  | {
+      type: "dialog";
+      id: string;
+      kind: "alert" | "confirm" | "prompt" | "beforeunload";
+      message: string;
+      defaultValue: string;
+    }
   | { type: "error"; message: string };
 
 // nが正なら土台のopsをa番目からn個、yをdyだけずらして使う。そうでなければoを差し込む。
