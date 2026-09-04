@@ -407,6 +407,8 @@ interface CurrentList {
   list: DisplayList;
   // nodeIdから送信済み画像のhash
   assets: Map<number, string>;
+  // バイト列を失ったとクライアントが言ってきたnodeId。assetRefで返しても絵は戻らない
+  forceRaw: Set<number>;
   // 背景として撮るnodeId。撮影中は子孫を隠す
   background: Set<number>;
 }
@@ -515,7 +517,15 @@ async function extractOnce(): Promise<void> {
   }
   // 表を置き直せず丸ごと送るときも、クライアントは同じ文書なら位置を保つ
   const scrollY = base?.scrollY ?? 0;
-  setCurrentList({ listId, viewKey: key, scrollY, list: snap.list, assets: new Map(), background });
+  setCurrentList({
+    listId,
+    viewKey: key,
+    scrollY,
+    list: snap.list,
+    assets: new Map(),
+    forceRaw: new Set(),
+    background,
+  });
   send(full);
 }
 
@@ -546,6 +556,22 @@ const ASSET_BATCH = 8;
 const assetQueue: number[] = [];
 let pumpingAssets = false;
 
+// 読んでいる位置から近い順に並べ替える。上へ戻る分は後回しでよいので距離を倍に見る
+// （pickNextTileと同じ測り方）。近いものが固まるので撮影の枚数も減る
+function sortAssetQueue(list: CurrentList): void {
+  const top = list.scrollY;
+  const tops = new Map<number, number>();
+  for (const op of list.list.ops) {
+    if (op.t === 2 && op.i !== undefined) tops.set(op.i, op.b[1] ?? 0);
+  }
+  const distance = (nodeId: number): number => {
+    const y = tops.get(nodeId);
+    if (y === undefined) return Number.MAX_SAFE_INTEGER; // 差分で表示リストから消えた画像
+    return y >= top ? y - top : (top - y) * 2;
+  };
+  assetQueue.sort((a, b) => distance(a) - distance(b));
+}
+
 async function pumpAssets(): Promise<void> {
   if (pumpingAssets) return;
   pumpingAssets = true;
@@ -553,11 +579,13 @@ async function pumpAssets(): Promise<void> {
     while (assetQueue.length > 0 && currentList && client?.readyState === WebSocket.OPEN) {
       const list = currentList;
       const ws = client;
+      // 撮っているあいだにも位置は動く。1回分ごとに選び直す
+      sortAssetQueue(list);
       const assets = await captureAssets(assetQueue.splice(0, ASSET_BATCH), list.background);
       // 切り出しを待つ間にページが差し替わっていたら送らない
       if (currentList !== list) break;
       for (const asset of assets) {
-        const held = clientTiles.has(asset.hash);
+        const held = !list.forceRaw.delete(asset.nodeId) && clientTiles.has(asset.hash);
         rememberHash(asset.hash, asset.data.byteLength);
         list.assets.set(asset.nodeId, asset.hash);
         if (held) {
@@ -1081,10 +1109,11 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
       for (const nodeId of msg.nodeIds) {
         // 一度撮ったものは撮り直さない。ただし写しから落ちているなら実体が要る
         const hash = list.assets.get(nodeId);
-        if (hash !== undefined && clientTiles.has(hash)) {
+        if (!msg.raw && hash !== undefined && clientTiles.has(hash)) {
           send({ type: "assetRef", listId: list.listId, nodeId, hash });
           continue;
         }
+        if (msg.raw) list.forceRaw.add(nodeId);
         if (!assetQueue.includes(nodeId)) assetQueue.push(nodeId);
       }
       void pumpAssets();

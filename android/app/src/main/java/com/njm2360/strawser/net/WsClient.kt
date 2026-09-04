@@ -132,7 +132,7 @@ class WsClient(
                     onAsset(msg.listId, msg.nodeId, msg.hash)
                 } else {
                     Log.i(TAG, "asset ${msg.nodeId} cache miss (${msg.hash})")
-                    send(ClientMsg.RequestAssets(msg.listId, listOf(msg.nodeId)))
+                    send(ClientMsg.RequestAssets(msg.listId, listOf(msg.nodeId), raw = true))
                 }
                 return
             }

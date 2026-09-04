@@ -146,7 +146,7 @@ internal fun VectorPageView(
     page: VectorPage?,
     tiles: TileStore,
     onActivate: (nodeId: Int, x: Double, y: Double) -> Unit,
-    onRequestAssets: (List<Int>) -> Unit,
+    onRequestAssets: (nodeIds: List<Int>, raw: Boolean) -> Unit,
     onScrollPos: (listId: String, y: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -167,14 +167,18 @@ internal fun VectorPageView(
         }
 
         val wanted = remember(page) { mutableStateListOf<Int>() }
+        // hashは持っているのにバイト列が落ちたもの。assetRefで返されると灰色のまま戻らない
+        val lost = remember(page) { mutableStateListOf<Int>() }
         val request by rememberUpdatedState(onRequestAssets)
         LaunchedEffect(page) {
             while (true) {
                 delay(ASSET_BATCH_MS)
-                if (wanted.isEmpty()) continue
-                val batch = wanted.toList()
-                wanted.clear()
-                request(batch)
+                for (queue in listOf(wanted, lost)) {
+                    if (queue.isEmpty()) continue
+                    val batch = queue.toList()
+                    queue.clear()
+                    request(batch, queue === lost)
+                }
             }
         }
 
@@ -235,7 +239,8 @@ internal fun VectorPageView(
                         if (bitmap != null) {
                             canvas.drawBitmap(bitmap, null, rectOf(op), null)
                         } else {
-                            if (hash == null && !wanted.contains(op.i)) wanted.add(op.i)
+                            val queue = if (hash == null) wanted else lost
+                            if (!queue.contains(op.i)) queue.add(op.i)
                             paint.reset()
                             paint.color = 0x14000000
                             canvas.drawRect(rectOf(op), paint)

@@ -228,9 +228,9 @@ internal class BrowserState(
     }
 
     /** 画面に入った画像だけ要求する。vectorモードの画像は要求しなければ届かない */
-    fun requestAssets(nodeIds: List<Int>) {
+    fun requestAssets(nodeIds: List<Int>, raw: Boolean) {
         val target = vector ?: return
-        if (nodeIds.isNotEmpty()) client.send(ClientMsg.RequestAssets(target.listId, nodeIds))
+        if (nodeIds.isNotEmpty()) client.send(ClientMsg.RequestAssets(target.listId, nodeIds, raw))
     }
 
     fun selectMode(next: String) {

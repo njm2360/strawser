@@ -118,10 +118,15 @@ sealed interface ClientMsg {
         val y: Double,
     ) : ClientMsg
 
-    // 画面に入った画像の実体要求。要求するまで届かない
+    // 画面に入った画像の実体要求。要求するまで届かない。
+    // rawは手元でバイト列を失ったとき。assetRefで返されても絵は戻らないので実体が届く
     @Serializable
     @SerialName("requestAssets")
-    data class RequestAssets(val listId: String, val nodeIds: List<Int>) : ClientMsg
+    data class RequestAssets(
+        val listId: String,
+        val nodeIds: List<Int>,
+        val raw: Boolean = false,
+    ) : ClientMsg
 
     // vectorDiffの土台が手元に無かったとき。表示リストが丸ごと届く
     @Serializable
