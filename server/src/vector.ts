@@ -30,7 +30,15 @@ export async function extractList(base?: DisplayList): Promise<Extraction> {
   await page.evaluate(NAME_SHIM);
   if (base) await page.evaluate(seedTables, { colors: base.colors, fonts: base.fonts });
   await page.evaluate(settle).catch(() => {});
-  return page.evaluate(walkPage);
+  // 表示リストは文書を上から写したもの。継ぎ足しとタップは実ページをスクロールさせるので、
+  // その位置で歩くとstickyとfixedが貼り付いた場所に焼き付く（Zennのタブは108が5000になる）
+  const at: number = await page.evaluate(() => window.scrollY).catch(() => 0);
+  if (at === 0) return page.evaluate(walkPage);
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  await page.evaluate(settle).catch(() => {});
+  const extraction = await page.evaluate(walkPage);
+  await page.evaluate((y) => window.scrollTo(0, y), at).catch(() => {});
+  return extraction;
 }
 
 export interface EncodedAsset {
