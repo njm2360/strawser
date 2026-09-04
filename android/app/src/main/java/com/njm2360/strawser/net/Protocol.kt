@@ -106,10 +106,16 @@ sealed interface ClientMsg {
     @SerialName("requestTiles")
     data class RequestTiles(val indices: List<Int>) : ClientMsg
 
+    // x/yは押された位置（ページ座標）。サーバーはこれを要素の矩形へ丸め込んで叩く。
     // nodeIdは同じ文書のあいだ変わらないが、遷移をまたぐとlistIdで弾かれる
     @Serializable
     @SerialName("activate")
-    data class Activate(val listId: String, val nodeId: Int) : ClientMsg
+    data class Activate(
+        val listId: String,
+        val nodeId: Int,
+        val x: Double,
+        val y: Double,
+    ) : ClientMsg
 
     // 画面に入った画像の実体要求。要求するまで届かない
     @Serializable

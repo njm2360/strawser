@@ -222,9 +222,9 @@ internal class BrowserState(
         showInput = false
     }
 
-    fun activate(nodeId: Int) {
+    fun activate(nodeId: Int, x: Double, y: Double) {
         val target = vector ?: return
-        client.send(ClientMsg.Activate(target.listId, nodeId))
+        client.send(ClientMsg.Activate(target.listId, nodeId, x, y))
     }
 
     /** 画面に入った画像だけ要求する。vectorモードの画像は要求しなければ届かない */

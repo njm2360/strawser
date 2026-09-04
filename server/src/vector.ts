@@ -178,21 +178,31 @@ async function encodeBand(
   }
 }
 
-/** 要素の矩形中央のページ座標 */
-export function nodeCenter(nodeId: number): Promise<{ x: number; y: number } | undefined> {
+/** 押された位置を要素の矩形へ丸め込んだページ座標 */
+export function nodePoint(
+  nodeId: number,
+  x: number,
+  y: number,
+): Promise<{ x: number; y: number } | undefined> {
   const { page } = getActivePage();
-  return page.evaluate((id: number) => {
-    const store = (window as unknown as { __strawserNodes?: Map<number, Element> }).__strawserNodes;
-    const el = store?.get(id);
-    if (!el) return undefined;
-    el.scrollIntoView({ block: "center" });
-    const r = el.getBoundingClientRect();
-    if (r.width < 1 || r.height < 1) return undefined;
-    return {
-      x: Math.round(r.left + window.scrollX + r.width / 2),
-      y: Math.round(r.top + window.scrollY + r.height / 2),
-    };
-  }, nodeId);
+  return page.evaluate(
+    (at: { id: number; x: number; y: number }) => {
+      const store = (window as unknown as { __strawserNodes?: Map<number, Element> })
+        .__strawserNodes;
+      const el = store?.get(at.id);
+      if (!el) return undefined;
+      el.scrollIntoView({ block: "center" });
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return undefined;
+      const sx = window.scrollX;
+      const sy = window.scrollY;
+      return {
+        x: Math.round(Math.min(Math.max(at.x, r.left + sx + 1), r.right + sx - 1)),
+        y: Math.round(Math.min(Math.max(at.y, r.top + sy + 1), r.bottom + sy - 1)),
+      };
+    },
+    { id: nodeId, x, y },
+  );
 }
 
 // 座標と同じ0.1pxの刻みへ戻す

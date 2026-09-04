@@ -413,6 +413,34 @@ export function walkPage(): Extraction {
   const outside = (r: Rect, clip: Rect | undefined): boolean =>
     clip !== undefined && (r.y + r.h <= clip.y || r.y >= clip.y + clip.h || r.x >= clip.x + clip.w);
 
+  const ACTIVATION_ROLES = new Set([
+    "button",
+    "link",
+    "checkbox",
+    "switch",
+    "radio",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "tab",
+    "option",
+  ]);
+
+  // cursor:pointerとtabindexは見ない。cursorは継承するので親に付いていれば無関係な子孫まで
+  // 押せることになり、tabindexはスクロール領域にも付く
+  const clickable = (el: Element, tag: string): boolean => {
+    if (tag === "A") return el.getAttribute("href") !== null;
+    if (tag === "BUTTON" || tag === "SUMMARY") return true;
+    // checkboxを隠してlabelだけ見せる開閉メニュー。controlを持たないlabelは
+    // サイト側のJSが拾う（Wikipediaの☰を閉じるマスク）
+    if (tag === "LABEL") return true;
+    // 入力欄はFIELD側で当たり判定を置く
+    if (FIELD.has(tag)) return false;
+    if (el.hasAttribute("onclick")) return true;
+    const role = el.getAttribute("role");
+    return role !== null && role.split(/\s+/).some((r) => ACTIVATION_ROLES.has(r));
+  };
+
   // 重ね合わせ文脈を作る要素だけ経路を伸ばす
   const layerOf = (cs: CSSStyleDeclaration, parent: number[]): number[] => {
     const z = cs.position === "static" ? NaN : parseInt(cs.zIndex);
@@ -450,8 +478,13 @@ export function walkPage(): Extraction {
         layer: layerOf(cs, ctx.layer),
         alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
       };
-      if ((tag === "A" && child.getAttribute("href") !== null) || tag === "BUTTON") {
+      if (clickable(child, tag)) {
         inner.link = idOf(child);
+        // インライン要素の枠は行をまたぐと行間まで含む。中の文字と画像のopが
+        // 同じnodeIdを持つので当たり判定は要らない
+        if (cs.display !== "inline" && child.getClientRects().length === 1) {
+          push({ t: 3, b: box(r), a: inner.link }, inner, r);
+        }
       }
 
       if (RASTER.has(tag)) {

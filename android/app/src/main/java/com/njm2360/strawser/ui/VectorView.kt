@@ -143,7 +143,7 @@ internal class VectorPage(
 internal fun VectorPageView(
     page: VectorPage?,
     tiles: TileStore,
-    onActivate: (nodeId: Int) -> Unit,
+    onActivate: (nodeId: Int, x: Double, y: Double) -> Unit,
     onRequestAssets: (List<Int>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -192,8 +192,10 @@ internal fun VectorPageView(
                 )
                 .pointerInput(page) {
                     detectTapGestures { offset ->
-                        val nodeId = page.hit(offset.x / scale, (offset.y + scrollY) / scale)
-                        if (nodeId >= 0) onActivate(nodeId)
+                        val x = offset.x / scale
+                        val y = (offset.y + scrollY) / scale
+                        val nodeId = page.hit(x, y)
+                        if (nodeId >= 0) onActivate(nodeId, x.toDouble(), y.toDouble())
                     }
                 },
         ) {

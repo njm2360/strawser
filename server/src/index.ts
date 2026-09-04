@@ -27,7 +27,7 @@ import {
   type FullPageCapture,
   type Tile,
 } from "./capture.ts";
-import { extractList, captureAssets, nodeCenter, diffOps, extendsTables } from "./vector.ts";
+import { extractList, captureAssets, nodePoint, diffOps, extendsTables } from "./vector.ts";
 import { tap, longPress, insertText, pressKey } from "./input.ts";
 import { loadConfig } from "./config.ts";
 import type { ClientMsg, ServerMsg, Mode, DisplayList } from "./protocol.ts";
@@ -1014,7 +1014,7 @@ async function handleMsg(msg: ClientMsg): Promise<void> {
     }
     case "activate": {
       if (mode !== "vector" || msg.listId !== currentList?.listId) break;
-      const at = await nodeCenter(msg.nodeId);
+      const at = await nodePoint(msg.nodeId, msg.x, msg.y);
       if (!at) break;
       await tap(at.x, at.y);
       setTimeout(() => void sendFocusState(), 300);

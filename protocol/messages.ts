@@ -46,9 +46,10 @@ export type ClientMsg =
   | { type: "liveAck" } // ライブフレーム受信確認（次フレーム送信の許可）
   // tileRefで指されたタイルが手元に無かったときの再要求。サーバーは実体を送り直す
   | { type: "requestTiles"; indices: number[] }
-  // サーバーは要素の矩形中央へタッチを注入する。
+  // x/yは押された位置（ページ座標）。サーバーはこれを要素の矩形へ丸め込んでタッチを注入する。
+  // 大きい要素は中央が別の要素に覆われていることがある。
   // nodeIdは同じ文書のあいだ変わらないが、遷移をまたぐとlistIdで弾かれる
-  | { type: "activate"; listId: string; nodeId: number }
+  | { type: "activate"; listId: string; nodeId: number; x: number; y: number }
   // 画面に入った画像の実体要求。要求されるまで送らない
   | { type: "requestAssets"; listId: string; nodeIds: number[] }
   // vectorDiffの土台が手元に無かったとき。サーバーは表示リストを丸ごと送り直す
