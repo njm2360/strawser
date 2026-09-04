@@ -470,7 +470,15 @@ export function walkPage(): Extraction {
       const tag = child.tagName.toUpperCase();
       if (SKIP.has(tag)) continue;
       const cs = getComputedStyle(child);
-      if (cs.display === "none" || cs.visibility === "hidden") continue;
+      // content-visibility:hiddenの中身は描かれないのに矩形は畳む前のまま返る
+      // （Wikipediaの折りたたまれた節）。歩くと閉じた節が全部重なって出る
+      if (
+        cs.display === "none" ||
+        cs.visibility === "hidden" ||
+        cs.contentVisibility === "hidden"
+      ) {
+        continue;
+      }
       // display:contentsは箱を作らないので矩形が0x0で返る
       if (cs.display === "contents") {
         const through: Ctx = { ...ctx };
