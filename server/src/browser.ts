@@ -90,6 +90,43 @@ export async function screenshotRegion(clip: Clip): Promise<Buffer | undefined> 
   return shot && Buffer.from(shot.data, "base64");
 }
 
+/**
+ * 版面を変えずにyから表示1画面ぶんを撮る。返すyは実際に撮れた位置で、
+ * ページ末尾やスクロールしないページでは要求より手前になる。
+ * onScrolledは撮る直前、その位置で呼ぶ。
+ *
+ * setDeviceMetricsOverrideで高さを変えるとvh・fixed・stickyが別のレイアウトになり、
+ * 表示リストの座標と食い違う
+ */
+export async function screenshotViewport(
+  y: number,
+  scale: number,
+  onScrolled?: (at: number) => Promise<void>,
+): Promise<{ png: Buffer; y: number } | undefined> {
+  const { page, cdp } = getActiveTab();
+  const at: number = await page.evaluate(() => window.scrollY).catch(() => 0);
+  // clip.scaleに掛かるのは自セッションのdpr。上書きしていないセッションでは1になる
+  await setMetrics(cdp, viewport.height);
+  await page.evaluate((v) => window.scrollTo(0, v), y).catch(() => {});
+  await page.waitForTimeout(RELAYOUT_MS);
+  const top: number = await page.evaluate(() => Math.round(window.scrollY)).catch(() => y);
+  await onScrolled?.(top);
+  const shot = await cdp
+    .send("Page.captureScreenshot", {
+      format: "png",
+      clip: {
+        x: 0,
+        y: top,
+        width: viewport.width,
+        height: viewport.height,
+        scale: scale / DEVICE_SCALE,
+      },
+    })
+    .catch(() => undefined);
+  await page.evaluate((v) => window.scrollTo(0, v), at).catch(() => {});
+  return shot && { png: Buffer.from(shot.data, "base64"), y: top };
+}
+
 // ログインセッション等を永続化するユーザーデータディレクトリ
 const USER_DATA_DIR = path.resolve(import.meta.dirname, "..", "user-data");
 

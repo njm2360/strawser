@@ -209,7 +209,7 @@ export async function extractLoaded(): Promise<void> {
   }, SETTLE_REFRESH_MS);
 }
 
-// captureAssetsは帯ごとに1枚撮るので、まとめて渡すほどスクリーンショットが減る
+// captureAssetsは撮る位置ごとに1枚撮るので、まとめて渡すほどスクリーンショットが減る
 const ASSET_BATCH = 8;
 export const assetQueue: number[] = [];
 let pumpingAssets = false;

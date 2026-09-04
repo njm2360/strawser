@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import sharp from "sharp";
-import { getActivePage, getViewport, screenshotRegion } from "./browser.ts";
+import { getActivePage, getViewport, screenshotViewport } from "./browser.ts";
 import { walkPage, seedTables, type AssetRect, type Extraction } from "./page-script.ts";
 import type { DisplayList, DrawOp, OpChunk } from "./protocol.ts";
 
@@ -63,11 +63,28 @@ function freshRects(nodeIds: number[]): Promise<AssetRect[]> {
   }, nodeIds);
 }
 
-const BAND_HEIGHT = 4096; // 1回のスクリーンショットで覆う高さ（ページ座標）
+// 撮る位置ごとにまとめる。1枚で覆えるのは表示1画面ぶんなので、
+// それに収まらない矩形は自分から始まる1枚に入るところまで。
+// 位置は下端に寄せる。先頭1画面ならスクロールせずに済み（スクロールで見出しを差し替える
+// サイトがある。tenki.jp）、上に貼り付くものからも遠ざかる
+function shotsFor(rects: AssetRect[], height: number): { y: number; list: AssetRect[] }[] {
+  const groups: { top: number; bottom: number; list: AssetRect[] }[] = [];
+  let cur: { top: number; bottom: number; list: AssetRect[] } | undefined;
+  for (const r of [...rects].sort((a, b) => a.y - b.y)) {
+    if (cur && r.y + r.h <= cur.top + height) {
+      cur.bottom = Math.max(cur.bottom, r.y + r.h);
+      cur.list.push(r);
+      continue;
+    }
+    cur = { top: r.y, bottom: r.y + r.h, list: [r] };
+    groups.push(cur);
+  }
+  return groups.map((g) => ({ y: Math.max(0, g.bottom - height), list: g.list }));
+}
 
 // 切り抜きは実ページの撮り直しなので、矩形に重なるものが一緒に焼き付き、opとしても
 // 描かれて二重になる。撮るあいだだけ対象の血縁でないものを隠す。
-// 背景として撮るものは半透明のことがあり、下に敷かれた絵まで消えるので触らない
+// 背景として撮るものは半透明のことがあり、下に敷かれた絵まで消えるので重なりでは落とさない
 // （cookpadのカードはグラデーション越しに写真が見える）
 async function isolate(nodeIds: number[], asBackground: boolean, on: boolean): Promise<void> {
   const { page } = getActivePage();
@@ -90,25 +107,28 @@ async function isolate(nodeIds: number[], asBackground: boolean, on: boolean): P
           const el = store?.get(id);
           if (el) targets.push(el);
         }
-        if (asBackground) {
-          for (const el of targets) el.setAttribute("data-sw-bg", "");
-        } else {
-          // 祖先を隠すと対象ごと消え、子孫は絵の一部
-          const kin = new Set<Element>();
-          for (const el of targets) {
-            for (let p: Element | null = el; p; p = p.parentElement) kin.add(p);
-            for (const d of el.querySelectorAll("*")) kin.add(d);
+        // 祖先を隠すと対象ごと消え、子孫は絵の一部
+        const kin = new Set<Element>();
+        for (const el of targets) {
+          for (let p: Element | null = el; p; p = p.parentElement) kin.add(p);
+          if (!asBackground) for (const d of el.querySelectorAll("*")) kin.add(d);
+        }
+        if (asBackground) for (const el of targets) el.setAttribute("data-sw-bg", "");
+        const boxes = asBackground ? [] : targets.map((el) => el.getBoundingClientRect());
+        for (const el of document.body.querySelectorAll("*")) {
+          if (kin.has(el)) continue;
+          // 背景の下に敷かれた絵は残したいが、上へ貼り付いたものは絵ではない
+          if (asBackground) {
+            const pos = getComputedStyle(el).position;
+            if (pos === "fixed" || pos === "sticky") el.setAttribute("data-sw-over", "");
+            continue;
           }
-          const boxes = targets.map((el) => el.getBoundingClientRect());
-          for (const el of document.body.querySelectorAll("*")) {
-            if (kin.has(el)) continue;
-            const r = el.getBoundingClientRect();
-            if (r.width < 1 || r.height < 1) continue;
-            const hit = boxes.some(
-              (b) => r.right > b.left && r.left < b.right && r.bottom > b.top && r.top < b.bottom,
-            );
-            if (hit) el.setAttribute("data-sw-over", "");
-          }
+          const r = el.getBoundingClientRect();
+          if (r.width < 1 || r.height < 1) continue;
+          const hit = boxes.some(
+            (b) => r.right > b.left && r.left < b.right && r.bottom > b.top && r.top < b.bottom,
+          );
+          if (hit) el.setAttribute("data-sw-over", "");
         }
         if (!style) {
           style = document.createElement("style");
@@ -134,50 +154,41 @@ export async function captureAssets(
 ): Promise<EncodedAsset[]> {
   const rects = await freshRects(nodeIds);
   if (rects.length === 0) return [];
-  const { width: pageWidth, scale } = getViewport();
-  const bands = new Map<number, AssetRect[]>();
-  for (const r of rects) {
-    const band = Math.floor(r.y / BAND_HEIGHT);
-    const list = bands.get(band);
-    if (list) list.push(r);
-    else bands.set(band, [r]);
-  }
+  const { height: viewHeight, scale } = getViewport();
 
   const out: EncodedAsset[] = [];
-  for (const [band, list] of bands) {
-    const baseY = band * BAND_HEIGHT;
-    for (const asBackground of [false, true]) {
-      const group = list.filter((r) => background.has(r.nodeId) === asBackground);
-      if (group.length === 0) continue;
-      const ids = group.map((r) => r.nodeId);
-      await isolate(ids, asBackground, true);
-      await encodeBand(out, baseY, pageWidth, scale, group);
-      await isolate(ids, asBackground, false);
+  for (const asBackground of [false, true]) {
+    const group = rects.filter((r) => background.has(r.nodeId) === asBackground);
+    if (group.length === 0) continue;
+    for (const shot of shotsFor(group, viewHeight)) {
+      await encodeShot(out, shot.y, scale, asBackground, shot.list);
     }
   }
   return out;
 }
 
-async function encodeBand(
+async function encodeShot(
   out: EncodedAsset[],
-  baseY: number,
-  pageWidth: number,
+  wantY: number,
   scale: number,
+  asBackground: boolean,
   list: AssetRect[],
 ): Promise<void> {
-  const shot = await screenshotRegion({
-    x: 0,
-    y: baseY,
-    width: pageWidth,
-    height: BAND_HEIGHT,
-    scale,
+  const ids = list.map((r) => r.nodeId);
+  // 矩形も隠すものも撮る位置で決める。スクロールで畳まれる帯があると版面がずれ（tenki.jpの
+  // アプリ誘導）、stickyが貼り付くのもJSがそれを切り替えるのもスクロール後
+  let shotRects = list;
+  const shot = await screenshotViewport(wantY, scale, async () => {
+    shotRects = await freshRects(ids);
+    await isolate(ids, asBackground, true);
   });
+  await isolate(ids, asBackground, false);
   if (!shot) return;
-  const img = sharp(shot);
+  const img = sharp(shot.png);
   const meta = await img.metadata();
-  for (const r of list) {
+  for (const r of shotRects) {
     const left = Math.max(0, Math.round(r.x * scale));
-    const top = Math.max(0, Math.round((r.y - baseY) * scale));
+    const top = Math.max(0, Math.round((r.y - shot.y) * scale));
     const width = Math.min(Math.round(r.w * scale), (meta.width ?? 0) - left);
     const height = Math.min(Math.round(r.h * scale), (meta.height ?? 0) - top);
     if (width < 8 || height < 8) continue;
