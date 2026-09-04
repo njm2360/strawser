@@ -559,7 +559,9 @@ export function walkPage(): Extraction {
       if (FIELD.has(tag)) {
         const input = child as HTMLInputElement;
         const id = idOf(child);
-        const shown = input.value || input.placeholder || "";
+        // selectのvalueはoption要素のvalue属性。見えているのは選ばれたoptionの文字
+        const picked = tag === "SELECT" ? (child as HTMLSelectElement).selectedOptions[0] : null;
+        const shown = picked ? picked.text.trim() : input.value || input.placeholder || "";
         if (shown) {
           const size = parseFloat(cs.fontSize);
           const fo = fontId(cs); // measureのフォントもここで揃う
@@ -573,7 +575,7 @@ export function walkPage(): Extraction {
             w: Math.min(measure.measureText(shown).width, r.w),
             h: size * 1.2,
           };
-          const co = colorId(input.value ? cs.color : "rgb(150,150,150)", inner.alpha);
+          const co = colorId(picked || input.value ? cs.color : "rgb(150,150,150)", inner.alpha);
           if (co >= 0) push({ t: 1, b: box(line), fo, co, s: shown }, inner, line);
         }
         // 描くものは無い。タップでこの欄へ入るための当たり判定として置く
