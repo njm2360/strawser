@@ -204,7 +204,7 @@ internal class BrowserState(
 
     fun reload() = client.send(ClientMsg.Reload)
 
-    fun newTab() = client.send(ClientMsg.NewTab())
+    fun newTab(url: String? = null) = client.send(ClientMsg.NewTab(url))
 
     fun closeTab(tabId: String) = client.send(ClientMsg.CloseTab(tabId))
 

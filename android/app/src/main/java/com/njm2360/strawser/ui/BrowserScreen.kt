@@ -37,6 +37,8 @@ fun BrowserScreen(
     serverUrl: String,
     searchEngine: SearchEngine,
     tileCacheBytes: Int,
+    openInput: String?,
+    onOpened: () -> Unit,
     onOpenSettings: () -> Unit,
     onAuthError: () -> Unit,
     modifier: Modifier = Modifier,
@@ -83,6 +85,12 @@ fun BrowserScreen(
         if (state.connected) state.sendViewport()
     }
 
+    LaunchedEffect(openInput, state.connected) {
+        if (openInput == null || !state.connected) return@LaunchedEffect
+        state.newTab(resolveInput(openInput, searchEngine))
+        onOpened()
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -100,7 +108,7 @@ fun BrowserScreen(
                 onOpenSettings = onOpenSettings,
                 onNavigate = { state.navigate(resolveInput(it, searchEngine)) },
                 onShowTabs = { showTabs = true },
-                onNewTab = state::newTab,
+                onNewTab = { state.newTab() },
                 onBack = state::back,
                 onForward = state::forward,
                 onReload = state::reload,

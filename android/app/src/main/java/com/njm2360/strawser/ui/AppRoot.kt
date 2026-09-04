@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.Settings
 
 @Composable
-fun AppRoot(modifier: Modifier = Modifier) {
+fun AppRoot(openInput: String?, onOpened: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val prefs = remember { Settings.prefs(context) }
     var settings by remember { mutableStateOf(Settings.load(prefs)) }
@@ -36,6 +36,8 @@ fun AppRoot(modifier: Modifier = Modifier) {
                     serverUrl = settings.connectUrl(),
                     searchEngine = settings.searchEngine,
                     tileCacheBytes = settings.tileCacheBytes,
+                    openInput = openInput,
+                    onOpened = onOpened,
                     onOpenSettings = {
                         settingsError = null
                         showSettings = true
