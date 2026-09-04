@@ -489,7 +489,15 @@ export function walkPage(): Extraction {
       const opacity = Number(cs.opacity);
       if (opacity === 0) continue;
       const cr = child.getBoundingClientRect();
-      if (cr.width < 0.5 && cr.height < 0.5) continue;
+      // 子が全部position:absoluteだと箱が0x0に潰れる（ニコニコのサムネイルの<picture>）。
+      // overflowが効いていなければ子はその外へ描かれるので、枝ごと落とすと絵が消える
+      if (cr.width < 0.5 && cr.height < 0.5) {
+        if (cs.overflow !== "visible") continue;
+        const through: Ctx = { ...ctx };
+        if (clickable(child, tag)) through.link = idOf(child);
+        walk(child, through, depth + 1);
+        continue;
+      }
       const r: Rect = { x: cr.left + sx, y: cr.top + sy, w: cr.width, h: cr.height };
       if (hiddenForReaders(cs, r) || outside(r, ctx.clip)) continue;
       // 画像が撮れないままクライアントが要求し続け、キューが詰まる
