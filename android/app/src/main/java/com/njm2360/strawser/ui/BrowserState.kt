@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.njm2360.strawser.decodeUrlForDisplay
+import com.njm2360.strawser.isBlankUrl
 import com.njm2360.strawser.net.ClientMsg
 import com.njm2360.strawser.net.ServerMsg
 import com.njm2360.strawser.net.TileStore
@@ -157,7 +158,7 @@ internal class BrowserState(
             }
             is ServerMsg.NavState -> {
                 navState = msg
-                urlInput = decodeUrlForDisplay(msg.url)
+                urlInput = if (isBlankUrl(msg.url)) "" else decodeUrlForDisplay(msg.url)
                 // 新しい遷移が始まったら前回のエラー表示を消す
                 if (msg.loading) errorText = null
             }

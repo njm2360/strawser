@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.njm2360.strawser.decodeUrlForDisplay
+import com.njm2360.strawser.isBlankUrl
 import com.njm2360.strawser.net.ServerMsg
 
 @Composable
@@ -73,7 +74,7 @@ private fun TabListRow(
     onSelect: () -> Unit,
     onClose: () -> Unit,
 ) {
-    val blank = tab.url.isBlank() || tab.url == "about:blank"
+    val blank = isBlankUrl(tab.url)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier

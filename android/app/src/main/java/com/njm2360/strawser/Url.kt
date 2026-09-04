@@ -2,6 +2,9 @@ package com.njm2360.strawser
 
 import java.net.URLDecoder
 
+// server/src/browser.tsのNEW_TAB_URLと合わせる
+private const val NEW_TAB_URL = "about:blank"
+
 private val SCHEME = Regex("^[a-zA-Z][a-zA-Z0-9+.\\-]*://")
 private val LOCALHOST = Regex("^localhost(:\\d+)?([/?#].*)?$", RegexOption.IGNORE_CASE)
 private val IPV4_HOST = Regex("^\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?([/?#].*)?$")
@@ -18,6 +21,8 @@ fun resolveInput(input: String, engine: SearchEngine): String {
         else -> engine.search(text)
     }
 }
+
+fun isBlankUrl(url: String): Boolean = url.isBlank() || url == NEW_TAB_URL
 
 fun decodeUrlForDisplay(url: String): String = try {
     // URLDecoderは+を空白にするので一旦退避する
