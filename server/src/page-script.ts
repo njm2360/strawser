@@ -259,12 +259,24 @@ export function walkPage(): Extraction {
       parseFloat(cs.borderLeftWidth),
     ];
     const bordered = bw.some((w) => w > 0);
+    // 罫線を畳む表では、隣り合うセルが境目の1本を共有し、矩形は線の内側までしか無い。
+    // 半分ずつ広げると両側の線が同じ位置に重なる
+    const half =
+      cs.borderCollapse === "collapse" && cs.display.startsWith("table")
+        ? bw.map((w) => w / 2)
+        : [0, 0, 0, 0];
+    const edge: Rect = {
+      x: r.x - half[3]!,
+      y: r.y - half[0]!,
+      w: r.w + half[1]! + half[3]!,
+      h: r.h + half[0]! + half[2]!,
+    };
     const shadows = splitShadows(cs.boxShadow)
       .map((s) => parseShadow(s, ctx.alpha))
       .filter((s) => s !== undefined);
     const shadow = shadows[0];
     if (bg < 0 && !bordered && !shadow) return;
-    const op: DrawOp = { t: 0, b: box(r) };
+    const op: DrawOp = { t: 0, b: box(edge) };
     if (bg >= 0) op.f = bg;
     if (shadow) op.sh = shadow;
     const rd = [
@@ -291,10 +303,10 @@ export function walkPage(): Extraction {
       } else {
         // 下線だけの見出しなど、辺ごとに幅も色も違うものは1つの枠線に畳めない
         const sides: [number, number, number, number, string][] = [
-          [r.x, r.y, r.w, bw[0]!, cs.borderTopColor],
-          [r.x + r.w - bw[1]!, r.y, bw[1]!, r.h, cs.borderRightColor],
-          [r.x, r.y + r.h - bw[2]!, r.w, bw[2]!, cs.borderBottomColor],
-          [r.x, r.y, bw[3]!, r.h, cs.borderLeftColor],
+          [edge.x, edge.y, edge.w, bw[0]!, cs.borderTopColor],
+          [edge.x + edge.w - bw[1]!, edge.y, bw[1]!, edge.h, cs.borderRightColor],
+          [edge.x, edge.y + edge.h - bw[2]!, edge.w, bw[2]!, cs.borderBottomColor],
+          [edge.x, edge.y, bw[3]!, edge.h, cs.borderLeftColor],
         ];
         for (const [x, y, w, h, c] of sides) {
           if (w <= 0 || h <= 0) continue;
@@ -309,12 +321,12 @@ export function walkPage(): Extraction {
     // CSSでは先に書いた影が上に来る
     if (bg >= 0) {
       for (let i = shadows.length - 1; i >= 1; i--) {
-        const under: DrawOp = { t: 0, b: box(r), f: bg, sh: shadows[i]! };
+        const under: DrawOp = { t: 0, b: box(edge), f: bg, sh: shadows[i]! };
         if (op.r) under.r = op.r;
-        push(under, ctx, r);
+        push(under, ctx, edge);
       }
     }
-    if (op.f !== undefined || op.k !== undefined || op.sh !== undefined) push(op, ctx, r);
+    if (op.f !== undefined || op.k !== undefined || op.sh !== undefined) push(op, ctx, edge);
   };
 
   const emitBox = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
