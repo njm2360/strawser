@@ -109,12 +109,13 @@ export function walkPage(): Extraction {
   const pageWidth = document.documentElement.clientWidth;
 
   const hex2 = (n: number): string => n.toString(16).padStart(2, "0");
-  const colorId = (css: string, alpha: number): number => {
+  // 透明な塗りは描くものが無いので落とす。グラデーションの停止色は透明でも要る
+  const colorId = (css: string, alpha: number, keepClear = false): number => {
     const m = /rgba?\(([^)]+)\)/.exec(css);
     if (!m) return -1;
     const p = m[1]!.split(",").map((v) => parseFloat(v));
     const a = (p.length > 3 ? p[3]! : 1) * alpha;
-    if (a < 0.004) return -1;
+    if (a < 0.004 && !keepClear) return -1;
     const rgb = `#${hex2(p[0]!)}${hex2(p[1]!)}${hex2(p[2]!)}`;
     const key = a > 0.996 ? rgb : `${rgb}${hex2(Math.round(a * 255))}`;
     let id = colorIndex.get(key);
@@ -202,8 +203,8 @@ export function walkPage(): Extraction {
     push(op, ctx, r);
   };
 
-  // 影は重ねて指定できる。rgba()の中にもカンマがあるので括弧の外だけで切る
-  const splitShadows = (css: string): string[] => {
+  // rgba()やgradient()の中にもカンマがあるので括弧の外だけで切る
+  const splitCommas = (css: string): string[] => {
     const out: string[] = [];
     let depth = 0;
     let start = 0;
@@ -238,6 +239,83 @@ export function walkPage(): Extraction {
     ];
   };
 
+  const SIDE_ANGLE = { top: 0, right: 90, bottom: 180, left: 270 } as const;
+  const DEGREES = { deg: 1, rad: 180 / Math.PI, grad: 0.9, turn: 360 } as const;
+
+  // 単層のlinear-gradientだけを畳む。返せなかったものは呼ぶ側がラスタへ回す。
+  // 角の指定（to top right）は箱の縦横比で角度が決まり、background-sizeを変えているものは
+  // 箱いっぱいに敷かれない
+  const parseGradient = (cs: CSSStyleDeclaration, r: Rect, alpha: number): number[] | undefined => {
+    const css = cs.backgroundImage;
+    if (!css.startsWith("linear-gradient(") || !css.endsWith(")")) return undefined;
+    if (cs.backgroundSize !== "auto") return undefined;
+    const parts = splitCommas(css.slice("linear-gradient(".length, -1)).map((s) => s.trim());
+    if (parts.length < 2) return undefined;
+
+    let angle: number = SIDE_ANGLE.bottom;
+    let from = 0;
+    const side = /^to\s+(\w+)$/.exec(parts[0]!);
+    const turned = /^(-?[\d.]+)(deg|rad|grad|turn)$/.exec(parts[0]!);
+    if (side) {
+      const found = SIDE_ANGLE[side[1]! as keyof typeof SIDE_ANGLE];
+      if (found === undefined) return undefined;
+      angle = found;
+      from = 1;
+    } else if (turned) {
+      angle = parseFloat(turned[1]!) * DEGREES[turned[2]! as keyof typeof DEGREES];
+      from = 1;
+    }
+    // 勾配線は箱の中心を通り、両端は角を通る垂線との交点
+    const rad = (angle * Math.PI) / 180;
+    const len = Math.abs(r.w * Math.sin(rad)) + Math.abs(r.h * Math.cos(rad));
+    if (!(len > 0)) return undefined;
+
+    const stops: { color: number; at: number | undefined }[] = [];
+    for (let i = from; i < parts.length; i++) {
+      const color = /^rgba?\([^)]*\)/.exec(parts[i]!);
+      if (!color) return undefined;
+      const id = colorId(color[0], alpha, true);
+      const rest = parts[i]!.slice(color[0].length).trim();
+      if (rest === "") {
+        stops.push({ color: id, at: undefined });
+        continue;
+      }
+      // 1つの停止色に位置を2つ書くと、その区間が単色になる
+      for (const token of rest.split(/\s+/)) {
+        const at = token.endsWith("%")
+          ? parseFloat(token) / 100
+          : token.endsWith("px")
+            ? parseFloat(token) / len
+            : NaN;
+        if (!(at >= 0) || at > 1) return undefined;
+        stops.push({ color: id, at });
+      }
+    }
+    if (stops.length < 2 || stops.length > 8) return undefined;
+
+    // 位置の無い停止色は、前後の決まっている位置のあいだに均等に置かれる
+    stops[0]!.at ??= 0;
+    stops[stops.length - 1]!.at ??= 1;
+    for (let i = 1; i < stops.length - 1; i++) {
+      if (stops[i]!.at !== undefined) continue;
+      let to = i + 1;
+      while (stops[to]!.at === undefined) to++;
+      const head = stops[i - 1]!.at!;
+      const step = (stops[to]!.at! - head) / (to - i + 1);
+      for (let k = i; k < to; k++) stops[k]!.at = head + step * (k - i + 1);
+      i = to - 1;
+    }
+
+    const out = [round(angle)];
+    let prev = 0;
+    for (const stop of stops) {
+      // 前より手前へ戻る位置はCSSが前へ揃える
+      prev = Math.max(prev, stop.at!);
+      out.push(stop.color, Math.round(prev * 1000) / 1000);
+    }
+    return out;
+  };
+
   // outlineはborderの外側に描かれる。端末は枠線を箱の内側へ寄せるので、
   // 線の分だけ広げた矩形の枠として渡すと位置が合う
   const emitOutline = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
@@ -250,7 +328,12 @@ export function walkPage(): Extraction {
     push({ t: 0, b: box(ring), k, kw: round(w) }, ctx, ring);
   };
 
-  const emitBorderBox = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
+  const emitBorderBox = (
+    cs: CSSStyleDeclaration,
+    r: Rect,
+    ctx: Ctx,
+    gradient: number[] | undefined,
+  ): void => {
     const bg = colorId(cs.backgroundColor, ctx.alpha);
     const bw = [
       parseFloat(cs.borderTopWidth),
@@ -271,11 +354,11 @@ export function walkPage(): Extraction {
       w: r.w + half[1]! + half[3]!,
       h: r.h + half[0]! + half[2]!,
     };
-    const shadows = splitShadows(cs.boxShadow)
+    const shadows = splitCommas(cs.boxShadow)
       .map((s) => parseShadow(s, ctx.alpha))
       .filter((s) => s !== undefined);
     const shadow = shadows[0];
-    if (bg < 0 && !bordered && !shadow) return;
+    if (bg < 0 && !bordered && !shadow && !gradient) return;
     const op: DrawOp = { t: 0, b: box(edge) };
     if (bg >= 0) op.f = bg;
     if (shadow) op.sh = shadow;
@@ -327,10 +410,21 @@ export function walkPage(): Extraction {
       }
     }
     if (op.f !== undefined || op.k !== undefined || op.sh !== undefined) push(op, ctx, edge);
+    // 背景画像は背景色の上に来る
+    if (gradient) {
+      const fill: DrawOp = { t: 0, b: box(edge), g: gradient };
+      if (op.r) fill.r = op.r;
+      push(fill, ctx, edge);
+    }
   };
 
-  const emitBox = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
-    emitBorderBox(cs, r, ctx);
+  const emitBox = (
+    cs: CSSStyleDeclaration,
+    r: Rect,
+    ctx: Ctx,
+    gradient: number[] | undefined,
+  ): void => {
+    emitBorderBox(cs, r, ctx, gradient);
     emitOutline(cs, r, ctx);
   };
 
@@ -652,10 +746,12 @@ export function walkPage(): Extraction {
     const r = pseudoRect(cs, parent);
     const text = contentText(content);
     if (text !== undefined && PUA.test(text)) return true;
+    const image = cs.backgroundImage !== "none";
     // 流れの中に置かれた擬似要素は位置を起こせない
-    if (!r) return cs.backgroundImage !== "none" || text === undefined;
-    if (cs.backgroundImage !== "none") return true;
-    emitBox(cs, r, inner);
+    if (!r) return image || text === undefined;
+    const gradient = image ? parseGradient(cs, r, inner.alpha) : undefined;
+    if (image && !gradient) return true;
+    emitBox(cs, r, inner, gradient);
     if (text && text.trim()) emitLine(cs, r, text, inner);
     return false;
   };
@@ -837,8 +933,9 @@ export function walkPage(): Extraction {
         raster(child, r, own, true);
         continue;
       }
+      const gradient = cs.backgroundImage === "none" ? undefined : parseGradient(cs, r, own.alpha);
       // 背景の上に子の文字が乗るので、ラスタにしても走査は続ける
-      if (cs.backgroundImage !== "none" && r.w >= 8 && r.h >= 8) {
+      if (cs.backgroundImage !== "none" && !gradient && r.w >= 8 && r.h >= 8) {
         raster(child, r, own, true);
         walk(child, inner, depth + 1);
         continue;
@@ -849,10 +946,10 @@ export function walkPage(): Extraction {
       const fragments = cs.display === "inline" ? child.getClientRects() : undefined;
       if (fragments !== undefined && fragments.length > 1) {
         for (const f of fragments) {
-          emitBox(cs, { x: f.left + sx, y: f.top + sy, w: f.width, h: f.height }, own);
+          emitBox(cs, { x: f.left + sx, y: f.top + sy, w: f.width, h: f.height }, own, gradient);
         }
       } else {
-        emitBox(cs, r, own);
+        emitBox(cs, r, own, gradient);
       }
       const iconic =
         emitPseudo(child, "::before", r, inner) || emitPseudo(child, "::after", r, inner);

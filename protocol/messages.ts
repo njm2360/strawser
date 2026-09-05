@@ -213,6 +213,7 @@ export interface DrawOp {
   k?: number; // 枠線色
   kw?: number; // 枠線幅
   r?: number[]; // 角丸4隅
+  g?: number[]; // グラデーション。角度（0が上向き、時計回り）に続いて塗り色と勾配線上の位置の組
   fo?: number; // フォント
   co?: number; // 文字色
   s?: string; // 文字

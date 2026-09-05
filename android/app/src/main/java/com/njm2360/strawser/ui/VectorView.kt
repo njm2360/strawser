@@ -4,9 +4,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.background
@@ -54,8 +56,11 @@ import com.njm2360.strawser.net.ServerMsg
 import com.njm2360.strawser.net.TileStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
+import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 // 描画コマンドをy座標で束ねる幅
 private const val BAND = 512
@@ -478,7 +483,44 @@ private fun drawRounded(canvas: Canvas, paint: Paint, r: RectF, radii: List<Floa
     canvas.drawPath(scratchPath, paint)
 }
 
+/** 勾配線は箱の中心を通り、両端は角を通る垂線との交点。角度は0が上向きで時計回り */
+private fun drawGradient(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) {
+    val count = (op.g.size - 1) / 2
+    if (count < 2) return
+    val colors = IntArray(count)
+    val stops = FloatArray(count)
+    for (i in 0 until count) {
+        val c = op.g[1 + i * 2].toInt()
+        if (c !in page.colors.indices) return
+        colors[i] = page.colors[c]
+        stops[i] = op.g[2 + i * 2]
+    }
+    val rad = Math.toRadians(op.g[0].toDouble())
+    val dx = sin(rad).toFloat()
+    val dy = -cos(rad).toFloat()
+    val half = (abs(op.b[2] * dx) + abs(op.b[3] * dy)) / 2f
+    val cx = op.b[0] + op.b[2] / 2f
+    val cy = op.b[1] + op.b[3] / 2f
+    paint.reset()
+    paint.isAntiAlias = true
+    paint.shader = LinearGradient(
+        cx - dx * half,
+        cy - dy * half,
+        cx + dx * half,
+        cy + dy * half,
+        colors,
+        stops,
+        Shader.TileMode.CLAMP,
+    )
+    drawRounded(canvas, paint, rectOf(op), op.r)
+    paint.shader = null
+}
+
 private fun drawBox(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) {
+    if (op.g.isNotEmpty()) {
+        drawGradient(canvas, paint, page, op)
+        return
+    }
     // 影は落とす形の不透明度から作られるので、塗りが無ければ出しようがない
     if (op.sh.size == 4 && op.f in page.colors.indices && op.sh[3].toInt() in page.colors.indices) {
         paint.reset()

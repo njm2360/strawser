@@ -44,6 +44,28 @@ function toSvg(dl: DisplayList, height: number, assets: Map<number, string>): st
       clip = ` clip-path="url(#c${n})"`;
     }
     if (op.t === 0) {
+      if (op.g) {
+        const rad = (op.g[0]! * Math.PI) / 180;
+        const dx = Math.sin(rad);
+        const dy = -Math.cos(rad);
+        const half = (Math.abs(w * dx) + Math.abs(h * dy)) / 2;
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        const stops: string[] = [];
+        for (let i = 1; i < op.g.length; i += 2) {
+          stops.push(`<stop offset="${op.g[i + 1]}" stop-color="${dl.colors[op.g[i]!]}"/>`);
+        }
+        defs.push(
+          `<linearGradient id="g${n}" gradientUnits="userSpaceOnUse"` +
+            ` x1="${cx - dx * half}" y1="${cy - dy * half}"` +
+            ` x2="${cx + dx * half}" y2="${cy + dy * half}">${stops.join("")}</linearGradient>`,
+        );
+        const rx = op.r ? ` rx="${op.r[0]}"` : "";
+        out.push(
+          `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#g${n})"${rx}${clip}/>`,
+        );
+        continue;
+      }
       const fill = op.f !== undefined ? dl.colors[op.f] : "none";
       const stroke =
         op.k !== undefined ? ` stroke="${dl.colors[op.k]}" stroke-width="${op.kw}"` : "";

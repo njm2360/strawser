@@ -339,6 +339,7 @@ data class DrawOp(
     val k: Int = -1, // 枠線色
     val kw: Float = 0f, // 枠線幅
     val r: List<Float> = emptyList(), // 角丸4隅
+    val g: List<Float> = emptyList(), // グラデーション。角度に続いて塗り色と勾配線上の位置の組
     val fo: Int = -1, // フォント
     val co: Int = -1, // 文字色
     val s: String = "", // 文字
