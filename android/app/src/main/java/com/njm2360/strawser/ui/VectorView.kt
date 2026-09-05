@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas as ComposeCanvas
@@ -453,14 +454,31 @@ private fun copyText(context: Context, text: String) {
 }
 
 private val scratch = RectF()
+private val scratchPath = Path()
+private val scratchRadii = FloatArray(8)
 
 private fun rectOf(op: DrawOp): RectF {
     scratch.set(op.b[0], op.b[1], op.b[0] + op.b[2], op.b[1] + op.b[3])
     return scratch
 }
 
+// op.rの4隅は上左・上右・下右・下左の順
+private fun drawRounded(canvas: Canvas, paint: Paint, r: RectF, radii: List<Float>) {
+    if (radii.size != 4 || radii.all { it == radii[0] }) {
+        val radius = radii.firstOrNull() ?: 0f
+        if (radius > 0f) canvas.drawRoundRect(r, radius, radius, paint) else canvas.drawRect(r, paint)
+        return
+    }
+    for (i in 0..3) {
+        scratchRadii[i * 2] = radii[i]
+        scratchRadii[i * 2 + 1] = radii[i]
+    }
+    scratchPath.reset()
+    scratchPath.addRoundRect(r, scratchRadii, Path.Direction.CW)
+    canvas.drawPath(scratchPath, paint)
+}
+
 private fun drawBox(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) {
-    val radius = op.r.maxOrNull() ?: 0f
     // 影は落とす形の不透明度から作られるので、塗りが無ければ出しようがない
     if (op.sh.size == 4 && op.f in page.colors.indices && op.sh[3].toInt() in page.colors.indices) {
         paint.reset()
@@ -473,16 +491,14 @@ private fun drawBox(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) 
             op.sh[1],
             page.colors[op.sh[3].toInt()],
         )
-        val r = rectOf(op)
-        if (radius > 0f) canvas.drawRoundRect(r, radius, radius, paint) else canvas.drawRect(r, paint)
+        drawRounded(canvas, paint, rectOf(op), op.r)
         paint.clearShadowLayer()
     }
     if (op.f in page.colors.indices) {
         paint.reset()
         paint.isAntiAlias = true
         paint.color = page.colors[op.f]
-        val r = rectOf(op)
-        if (radius > 0f) canvas.drawRoundRect(r, radius, radius, paint) else canvas.drawRect(r, paint)
+        drawRounded(canvas, paint, rectOf(op), op.r)
     }
     if (op.k in page.colors.indices && op.kw > 0f) {
         paint.reset()
@@ -494,7 +510,7 @@ private fun drawBox(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp) 
         val h = op.kw / 2f
         val r = rectOf(op)
         r.set(r.left + h, r.top + h, r.right - h, r.bottom - h)
-        if (radius > 0f) canvas.drawRoundRect(r, radius, radius, paint) else canvas.drawRect(r, paint)
+        drawRounded(canvas, paint, r, op.r)
     }
 }
 
