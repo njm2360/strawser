@@ -634,8 +634,19 @@ export function walkPage(): Extraction {
     "TITLE",
     "BR",
   ]);
-  const RASTER = new Set(["IMG", "PICTURE", "CANVAS", "VIDEO", "IFRAME", "SVG"]);
+  const RASTER = new Set([
+    "IMG",
+    "PICTURE",
+    "CANVAS",
+    "VIDEO",
+    "IFRAME",
+    "SVG",
+    "PROGRESS",
+    "METER",
+  ]);
   const FIELD = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+  // 中身をUAが描く入力欄。値は文字にならないので絵として撮る
+  const WIDGETS = new Set(["checkbox", "radio", "range", "color"]);
 
   // 読み上げ専用に1pxへ潰した要素。中の文字は元の大きさで測れてしまうので枝ごと落とす
   const hiddenForReaders = (cs: CSSStyleDeclaration, r: Rect): boolean =>
@@ -805,6 +816,11 @@ export function walkPage(): Extraction {
       if (FIELD.has(tag)) {
         const input = child as HTMLInputElement;
         const id = idOf(child);
+        if (tag === "INPUT" && WIDGETS.has(input.type)) {
+          raster(child, r, own, false);
+          push({ t: 3, b: box(r), a: id }, inner, r);
+          continue;
+        }
         // selectのvalueはoption要素のvalue属性。見えているのは選ばれたoptionの文字
         const picked = tag === "SELECT" ? (child as HTMLSelectElement).selectedOptions[0] : null;
         const shown = picked ? picked.text.trim() : input.value || input.placeholder || "";
