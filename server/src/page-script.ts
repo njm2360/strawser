@@ -202,6 +202,24 @@ export function walkPage(): Extraction {
     push(op, ctx, r);
   };
 
+  // 影は重ねて指定できる。rgba()の中にもカンマがあるので括弧の外だけで切る
+  const splitShadows = (css: string): string[] => {
+    const out: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < css.length; i++) {
+      const c = css[i];
+      if (c === "(") depth++;
+      else if (c === ")") depth--;
+      else if (c === "," && depth === 0) {
+        out.push(css.slice(start, i));
+        start = i + 1;
+      }
+    }
+    out.push(css.slice(start));
+    return out;
+  };
+
   // 内側の影（inset）は捨てる
   const parseShadow = (css: string, alpha: number): number[] | undefined => {
     if (!css || css === "none" || css.includes("inset")) return undefined;
@@ -241,7 +259,10 @@ export function walkPage(): Extraction {
       parseFloat(cs.borderLeftWidth),
     ];
     const bordered = bw.some((w) => w > 0);
-    const shadow = parseShadow(cs.boxShadow, ctx.alpha);
+    const shadows = splitShadows(cs.boxShadow)
+      .map((s) => parseShadow(s, ctx.alpha))
+      .filter((s) => s !== undefined);
+    const shadow = shadows[0];
     if (bg < 0 && !bordered && !shadow) return;
     const op: DrawOp = { t: 0, b: box(r) };
     if (bg >= 0) op.f = bg;
@@ -282,6 +303,15 @@ export function walkPage(): Extraction {
           const side = { x, y, w, h };
           push({ t: 0, b: box(side), f }, ctx, side);
         }
+      }
+    }
+    // 端末は影を塗りの形から作るので、2枚目以降は塗りごと同じ矩形のopを下へ重ねる。
+    // CSSでは先に書いた影が上に来る
+    if (bg >= 0) {
+      for (let i = shadows.length - 1; i >= 1; i--) {
+        const under: DrawOp = { t: 0, b: box(r), f: bg, sh: shadows[i]! };
+        if (op.r) under.r = op.r;
+        push(under, ctx, r);
       }
     }
     if (op.f !== undefined || op.k !== undefined || op.sh !== undefined) push(op, ctx, r);
