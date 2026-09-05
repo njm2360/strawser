@@ -312,10 +312,17 @@ export function walkPage(): Extraction {
     return out;
   };
 
+  // 幅は描画後の実測値なので、送る文字列も描かれた形へ揃える
+  const cased = (text: string, cs: CSSStyleDeclaration): string => {
+    if (cs.textTransform === "uppercase") return text.toUpperCase();
+    if (cs.textTransform === "lowercase") return text.toLowerCase();
+    return text;
+  };
+
   const emitLine = (cs: CSSStyleDeclaration, r: Rect, text: string, ctx: Ctx): void => {
     const co = colorId(cs.color, ctx.alpha);
     if (co < 0) return;
-    const op: DrawOp = { t: 1, b: box(r), fo: fontId(cs), co, s: text };
+    const op: DrawOp = { t: 1, b: box(r), fo: fontId(cs), co, s: cased(text, cs) };
     if (cs.textDecorationLine.includes("underline")) op.u = 1;
     if (ctx.link !== undefined) op.a = ctx.link;
     push(op, ctx, r);
