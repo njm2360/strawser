@@ -515,7 +515,8 @@ internal fun textPaint(paint: Paint, page: VectorPage, op: DrawOp): Boolean {
         italic = font.getOrElse(2) { 0f } > 0f,
     )
     paint.letterSpacing = if (size > 0f) letterSpacing / size else 0f
-    paint.isUnderlineText = op.u == 1
+    paint.isUnderlineText = (op.u and 1) != 0
+    paint.isStrikeThruText = (op.u and 2) != 0
     // 書体が違えば同じ文字列でも幅が違う。行幅へ詰めて右端を合わせる
     val target = op.b[2]
     if (target > 0f) {

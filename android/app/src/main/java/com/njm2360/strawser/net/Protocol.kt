@@ -342,7 +342,7 @@ data class DrawOp(
     val fo: Int = -1, // フォント
     val co: Int = -1, // 文字色
     val s: String = "", // 文字
-    val u: Int = 0, // 下線
+    val u: Int = 0, // 装飾のビット。1=下線、2=取り消し線
     val i: Int = -1, // 画像のnodeId
     val a: Int = -1, // 押せる要素のnodeId
     val sh: List<Float> = emptyList(), // 影。dx/dy/ぼかし/色

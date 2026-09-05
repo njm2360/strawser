@@ -216,7 +216,7 @@ export interface DrawOp {
   fo?: number; // フォント
   co?: number; // 文字色
   s?: string; // 文字
-  u?: 1; // 下線
+  u?: number; // 装飾のビット。1=下線、2=取り消し線
   i?: number; // 画像のnodeId。実体はrequestAssetsで要求する
   a?: number; // 押せる要素のnodeId
   sh?: number[]; // 影。dx/dy/ぼかし/色

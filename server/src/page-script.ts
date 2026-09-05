@@ -335,7 +335,10 @@ export function walkPage(): Extraction {
     const co = colorId(cs.color, ctx.alpha);
     if (co < 0) return;
     const op: DrawOp = { t: 1, b: box(r), fo: fontId(cs), co, s: cased(text, cs) };
-    if (cs.textDecorationLine.includes("underline")) op.u = 1;
+    const decoration = cs.textDecorationLine;
+    const u =
+      (decoration.includes("underline") ? 1 : 0) | (decoration.includes("line-through") ? 2 : 0);
+    if (u) op.u = u;
     if (ctx.link !== undefined) op.a = ctx.link;
     push(op, ctx, r);
   };

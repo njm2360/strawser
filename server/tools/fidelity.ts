@@ -22,6 +22,7 @@ const deflate = (s: string) => zlib.deflateSync(Buffer.from(s), { level: 6 }).by
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const FAMILY = ["sans-serif", "serif", "monospace"];
+const DECORATION = ["none", "underline", "line-through", "underline line-through"];
 const NAME_SHIM = "window.__name = window.__name || function (f) { return f; }";
 
 function toSvg(dl: DisplayList, height: number, assets: Map<number, string>): string {
@@ -67,7 +68,7 @@ function toSvg(dl: DisplayList, height: number, assets: Map<number, string>): st
           (italic ? ` font-style="italic"` : "") +
           ` font-family="${FAMILY[fam!]}" fill="${dl.colors[op.co!]}"` +
           (ls ? ` letter-spacing="${ls}"` : "") +
-          (op.u ? ` text-decoration="underline"` : "") +
+          (op.u ? ` text-decoration="${DECORATION[op.u]}"` : "") +
           ` textLength="${w}" lengthAdjust="spacingAndGlyphs"${clip} xml:space="preserve">${esc(op.s!)}</text>`,
       );
     } else if (op.t === 2) {
