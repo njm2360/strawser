@@ -222,4 +222,5 @@ export interface DrawOp {
   a?: number; // 押せる要素のnodeId
   sh?: number[]; // 影。dx/dy/ぼかし/色
   cl?: number[]; // 切り取り枠。x/y/w/h。overflowで切れる分だけ載る
+  pn?: number; // 画面に貼り付くopを下へ運べる距離。ずらす量はmin(scrollY,pn)
 }

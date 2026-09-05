@@ -88,7 +88,11 @@ internal class VectorPage(
     val assets = mutableStateMapOf<Int, String>()
 
     private val bands: Map<Int, List<Int>> =
-        list.ops.indices.groupBy { (list.ops[it].b[1] / BAND).toInt() }
+        list.ops.indices.filter { list.ops[it].pn < 0f }
+            .groupBy { (list.ops[it].b[1] / BAND).toInt() }
+
+    /** 画面に貼り付くop。スクロールで動くので帯に入れられない */
+    private val pinned: List<Int> = list.ops.indices.filter { list.ops[it].pn >= 0f }
 
     /**
      * 高い矩形が上の帯から垂れてくるので、band4つぶん余分に見る。
@@ -104,6 +108,7 @@ internal class VectorPage(
                 if (op.b[1] < bottom && op.b[1] + op.b[3] > top) out.add(i)
             }
         }
+        out.addAll(pinned)
         out.sort()
         return out.asSequence()
     }
@@ -111,13 +116,20 @@ internal class VectorPage(
     fun opsIn(top: Float, bottom: Float): Sequence<DrawOp> =
         indicesIn(top, bottom).map { list.ops[it] }
 
+    /** 貼り付いたopを下へ運ぶ距離。scrollYはページ座標 */
+    fun pinShift(op: DrawOp, scrollY: Float): Float =
+        if (op.pn < 0f) 0f else minOf(scrollY, op.pn)
+
     /** 押された位置の要素。手前に描かれたものが勝つ */
-    fun hit(x: Float, y: Float): Int {
-        var found = -1
+    fun hit(x: Float, y: Float, scrollY: Float): DrawOp? {
+        var found: DrawOp? = null
         for (op in opsIn(y - 1f, y + 1f)) {
             if (op.a < 0) continue
-            if (x >= op.b[0] && x <= op.b[0] + op.b[2] && y >= op.b[1] && y <= op.b[1] + op.b[3]) {
-                found = op.a
+            val dy = pinShift(op, scrollY)
+            if (x >= op.b[0] && x <= op.b[0] + op.b[2] &&
+                y >= op.b[1] + dy && y <= op.b[1] + op.b[3] + dy
+            ) {
+                found = op
             }
         }
         return found
@@ -358,10 +370,12 @@ internal fun VectorPageView(
                             focus = null
                             return@detectTapGestures
                         }
+                        val scroll = scrollY / curScale
                         val x = (offset.x - panPx) / curScale
                         val y = (offset.y + scrollY) / curScale
-                        val nodeId = page.hit(x, y)
-                        if (nodeId >= 0) onActivate(nodeId, x.toDouble(), y.toDouble())
+                        val op = page.hit(x, y, scroll) ?: return@detectTapGestures
+                        // 実ページでの位置を送る。貼り付いたopはそこから運ばれている
+                        onActivate(op.a, x.toDouble(), (y - page.pinShift(op, scroll)).toDouble())
                     }
                 },
         ) {
@@ -372,10 +386,12 @@ internal fun VectorPageView(
             canvas.translate(panPx, -scrollY)
             canvas.scale(scale, scale)
             for (op in page.opsIn(top, bottom)) {
+                val shift = page.pinShift(op, top)
                 // overflowで切れる分はサーバーが枠を載せてくる
                 val clipped = op.cl.size == 4
+                if (shift != 0f || clipped) canvas.save()
+                if (shift != 0f) canvas.translate(0f, shift)
                 if (clipped) {
-                    canvas.save()
                     canvas.clipRect(op.cl[0], op.cl[1], op.cl[0] + op.cl[2], op.cl[1] + op.cl[3])
                 }
                 when (op.t) {
@@ -395,7 +411,7 @@ internal fun VectorPageView(
                         }
                     }
                 }
-                if (clipped) canvas.restore()
+                if (shift != 0f || clipped) canvas.restore()
             }
             if (selRects.isNotEmpty()) {
                 paint.reset()

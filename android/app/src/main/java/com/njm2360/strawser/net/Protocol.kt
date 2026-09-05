@@ -348,4 +348,5 @@ data class DrawOp(
     val a: Int = -1, // 押せる要素のnodeId
     val sh: List<Float> = emptyList(), // 影。dx/dy/ぼかし/色
     val cl: List<Float> = emptyList(), // 切り取り枠。x/y/w/h
+    val pn: Float = -1f, // 画面に貼り付くopを下へ運べる距離
 )

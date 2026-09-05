@@ -31,6 +31,7 @@ interface Ctx {
   stack: number[];
   layer: number[];
   alpha: number;
+  pin: number | undefined;
 }
 
 interface Line {
@@ -107,6 +108,8 @@ export function walkPage(): Extraction {
   const sx = window.scrollX;
   const sy = window.scrollY;
   const pageWidth = document.documentElement.clientWidth;
+  const pageHeight = document.documentElement.scrollHeight;
+  const viewHeight = document.documentElement.clientHeight;
 
   const hex2 = (n: number): string => n.toString(16).padStart(2, "0");
   // 透明な塗りは描くものが無いので落とす。グラデーションの停止色は透明でも要る
@@ -184,6 +187,7 @@ export function walkPage(): Extraction {
   const push = (op: DrawOp, ctx: Ctx, r: Rect): void => {
     const cl = clipOf(r, ctx.clip);
     if (cl) op.cl = cl;
+    if (ctx.pin !== undefined) op.pn = round(ctx.pin);
     layered.push({ op, layer: ctx.layer });
   };
 
@@ -851,6 +855,22 @@ export function walkPage(): Extraction {
     return { stack: step, layer, own: [...step, SELF] };
   };
 
+  // 画面に貼り付く要素。歩くのはscrollY=0なので、opの座標は画面のなかでの位置になっている。
+  // クライアントがスクロールに合わせて運ぶ距離を返す
+  const pinOf = (el: Element, cs: CSSStyleDeclaration, r: DOMRect): number | undefined => {
+    if (cs.position === "fixed") return pageHeight;
+    if (cs.position !== "sticky") return undefined;
+    // 貼り付く前のstickyは流れの中の位置。運ぶと二重にずれる
+    const top = parseFloat(cs.top);
+    const bottom = parseFloat(cs.bottom);
+    const stuck =
+      (Number.isFinite(top) && Math.abs(r.top - top) < 1) ||
+      (Number.isFinite(bottom) && Math.abs(viewHeight - r.bottom - bottom) < 1);
+    if (!stuck) return undefined;
+    const box = el.parentElement?.getBoundingClientRect();
+    return box && Math.max(0, box.bottom - r.bottom);
+  };
+
   const walk = (el: Element, ctx: Ctx, depth: number): void => {
     if (depth > 80) return;
     for (const node of Array.from(el.childNodes)) {
@@ -912,6 +932,7 @@ export function walkPage(): Extraction {
         stack: layers.stack,
         layer: layers.layer,
         alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
+        pin: pinOf(child, cs, cr) ?? ctx.pin,
       };
       const link = clickable(child, tag) ? idOf(child) : undefined;
       if (link !== undefined) inner.link = link;
@@ -1000,6 +1021,7 @@ export function walkPage(): Extraction {
     stack: [],
     layer: [FLOW],
     alpha: 1,
+    pin: undefined,
   };
   walk(document.body, root, 0);
 
@@ -1017,7 +1039,7 @@ export function walkPage(): Extraction {
     url: location.href,
     list: {
       pageWidth,
-      fullHeight: Math.ceil(document.documentElement.scrollHeight),
+      fullHeight: Math.ceil(pageHeight),
       bg: colorId(getComputedStyle(document.body).backgroundColor, 1),
       colors,
       fonts,

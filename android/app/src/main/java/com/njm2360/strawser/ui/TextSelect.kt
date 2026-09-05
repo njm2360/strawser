@@ -52,7 +52,8 @@ internal fun VectorPage.textAt(
     var bestScore = Float.MAX_VALUE
     for (i in indicesIn(y - REACH, y + REACH)) {
         val op = list.ops[i]
-        if (op.t != 1 || op.s.isEmpty()) continue
+        // 貼り付いた行はページ座標が動くので選ばせない
+        if (op.t != 1 || op.s.isEmpty() || op.pn >= 0f) continue
         val dy = maxOf(0f, op.b[1] - y, y - (op.b[1] + op.b[3]))
         val dx = maxOf(0f, op.b[0] - x, x - (op.b[0] + op.b[2]))
         if (inside && (dy > 0f || dx > 0f)) continue
@@ -96,7 +97,7 @@ private inline fun VectorPage.forEachRun(
 ) {
     for (i in from.op..minOf(to.op, list.ops.size - 1)) {
         val op = list.ops[i]
-        if (op.t != 1) continue
+        if (op.t != 1 || op.pn >= 0f) continue
         val start = if (i == from.op) from.ch else 0
         val end = if (i == to.op) to.ch else op.s.length
         if (start >= end || end > op.s.length) continue
