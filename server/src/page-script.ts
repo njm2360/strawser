@@ -456,22 +456,93 @@ export function walkPage(): Extraction {
     square: "▪",
   };
 
-  // ::markerはgetComputedStyleに載らないので、list-style-typeから文字を起こす
-  const emitMarker = (el: Element, cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
-    if (cs.listStyleType === "none" || cs.listStylePosition !== "outside") return;
-    let glyph = MARKERS[cs.listStyleType];
-    if (!glyph && cs.listStyleType === "decimal") {
+  const LATIN = "abcdefghijklmnopqrstuvwxyz";
+  const ROMAN: [number, string][] = [
+    [1000, "M"],
+    [900, "CM"],
+    [500, "D"],
+    [400, "CD"],
+    [100, "C"],
+    [90, "XC"],
+    [50, "L"],
+    [40, "XL"],
+    [10, "X"],
+    [9, "IX"],
+    [5, "V"],
+    [4, "IV"],
+    [1, "I"],
+  ];
+
+  const latin = (n: number): string => {
+    let out = "";
+    for (let v = n; v > 0; v = Math.floor((v - 1) / 26)) out = LATIN[(v - 1) % 26] + out;
+    return out;
+  };
+
+  const roman = (n: number): string => {
+    let out = "";
+    let v = n;
+    for (const [value, glyph] of ROMAN) {
+      while (v >= value) {
+        out += glyph;
+        v -= value;
+      }
+    }
+    return out;
+  };
+
+  // 記数法の範囲を外れた番号はCSSでも10進に落ちる
+  const NUMBERED: Record<string, (n: number) => string> = {
+    decimal: (n) => `${n}`,
+    "decimal-leading-zero": (n) => (n >= 0 && n < 10 ? `0${n}` : `${n}`),
+    "lower-alpha": (n) => (n > 0 ? latin(n) : `${n}`),
+    "lower-latin": (n) => (n > 0 ? latin(n) : `${n}`),
+    "upper-alpha": (n) => (n > 0 ? latin(n).toUpperCase() : `${n}`),
+    "upper-latin": (n) => (n > 0 ? latin(n).toUpperCase() : `${n}`),
+    "lower-roman": (n) => (n > 0 && n < 4000 ? roman(n).toLowerCase() : `${n}`),
+    "upper-roman": (n) => (n > 0 && n < 4000 ? roman(n) : `${n}`),
+  };
+
+  // 番号は<ol start>から始まり<li value>で飛ぶ。reversedは降りる。li以外の兄弟は数に入らない
+  const ordinalOf = (el: Element): number => {
+    const list = el.parentElement;
+    if (!list || el.tagName !== "LI") {
       let index = 1;
       for (let p = el.previousElementSibling; p; p = p.previousElementSibling) index++;
-      glyph = `${index}.`;
+      return index;
     }
+    const ol = list.tagName === "OL" ? (list as HTMLOListElement) : undefined;
+    const items = Array.from(list.children).filter((c) => c.tagName === "LI");
+    const reversed = ol?.reversed ?? false;
+    // reversedでstartの指定が無いときは項目数から降りる
+    let n = ol?.hasAttribute("start") ? ol.start : reversed ? items.length : 1;
+    for (const item of items) {
+      const value = parseInt(item.getAttribute("value") ?? "");
+      if (Number.isFinite(value)) n = value;
+      if (item === el) break;
+      n += reversed ? -1 : 1;
+    }
+    return n;
+  };
+
+  // ::markerはgetComputedStyleに載らないので、list-style-typeから文字を起こす
+  const emitMarker = (el: Element, cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
+    if (cs.listStyleType === "none") return;
+    const numbered = NUMBERED[cs.listStyleType];
+    const glyph = numbered ? `${numbered(ordinalOf(el))}.` : MARKERS[cs.listStyleType];
     if (!glyph) return;
     const size = parseFloat(cs.fontSize);
     const lineHeight = parseFloat(cs.lineHeight) || size * 1.4;
+    setMeasureFont(cs);
+    const text = measure.measureText(glyph).width;
+    const inside = cs.listStylePosition === "inside";
+    // outsideの印は行の頭より外へ右揃えで置かれる。insideは行の一部なので内容の左端から
+    const w = inside ? text : Math.max(size * 0.9, text);
+    const indent = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0);
     const marker = {
-      x: r.x - size,
+      x: inside ? r.x + indent : r.x - w - size * 0.1,
       y: r.y + (lineHeight - size) / 2,
-      w: size * 0.9,
+      w,
       h: size * 1.2,
     };
     emitLine(cs, marker, glyph, ctx);
