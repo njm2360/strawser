@@ -307,9 +307,25 @@ export function walkPage(): Extraction {
     push(op, ctx, r);
   };
 
+  const PRE_SPACE = new Set(["pre", "pre-wrap", "break-spaces"]);
+  const TAB_COLUMNS = 8;
+
+  // 行の区切りは矩形が持っているので改行そのものは落とす。
+  // tab-sizeがpx指定のときは桁に直せないので既定の桁数で置く
+  const keepSpaces = (text: string, cs: CSSStyleDeclaration): string => {
+    const cols = cs.tabSize.endsWith("px") ? TAB_COLUMNS : parseInt(cs.tabSize) || TAB_COLUMNS;
+    let out = "";
+    for (const ch of text) {
+      if (ch === "\n" || ch === "\r") continue;
+      out += ch === "\t" ? " ".repeat(cols - (out.length % cols)) : ch;
+    }
+    return out;
+  };
+
   const emitText = (node: Text, cs: CSSStyleDeclaration, ctx: Ctx): void => {
+    const pre = PRE_SPACE.has(cs.whiteSpace);
     for (const line of lineRects(node)) {
-      const t = line.t.replace(/\s+/g, " ");
+      const t = pre ? keepSpaces(line.t, cs) : line.t.replace(/\s+/g, " ");
       if (!t.trim()) continue;
       const r = { x: line.r.left + sx, y: line.r.top + sy, w: line.r.width, h: line.r.height };
       if (ctx.clip && (r.y + r.h <= ctx.clip.y || r.y >= ctx.clip.y + ctx.clip.h)) continue;
