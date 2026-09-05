@@ -586,7 +586,49 @@ export function walkPage(): Extraction {
     return { x, y, w, h };
   };
 
-  const CONTENT_TEXT = /^"(.*)"$/s;
+  // CSSカウンタ。counter-resetとcounter-incrementを歩きながら当てる。
+  // 有効範囲の入れ子は持たないので、counters()も一番内側の値だけになる
+  const counterValues = new Map<string, number>();
+
+  // 計算値は「名前 値」の並び。noneなら何もしない
+  const applyCounters = (css: string, reset: boolean): void => {
+    if (!css || css === "none") return;
+    const parts = css.trim().split(/\s+/);
+    for (let i = 0; i < parts.length; i++) {
+      const name = parts[i]!;
+      const next = parseInt(parts[i + 1] ?? "");
+      const explicit = Number.isFinite(next);
+      if (explicit) i++;
+      const step = explicit ? next : reset ? 0 : 1;
+      counterValues.set(name, reset ? step : (counterValues.get(name) ?? 0) + step);
+    }
+  };
+
+  const CONTENT_PART = /"((?:[^"\\]|\\.)*)"|counters?\(([^)]*)\)/y;
+
+  // contentは文字列とcounter()の並び。/より後ろは読み上げ用の代替なので落とす。
+  // 画像や未対応の関数が混じったものは文字に起こせない
+  const contentText = (css: string): string | undefined => {
+    let out = "";
+    let at = 0;
+    for (;;) {
+      while (css[at] === " ") at++;
+      if (at >= css.length || css[at] === "/") return out;
+      CONTENT_PART.lastIndex = at;
+      const m = CONTENT_PART.exec(css);
+      if (!m) return undefined;
+      at = CONTENT_PART.lastIndex;
+      if (m[1] !== undefined) {
+        out += m[1].replace(/\\(.)/g, "$1");
+        continue;
+      }
+      const args = m[2]!.split(",").map((a) => a.trim());
+      // counters()は名前・区切り・記数法、counter()は名前・記数法
+      const style = m[0]!.startsWith("counters(") ? args[2] : args[1];
+      const format = NUMBERED[style ?? "decimal"] ?? NUMBERED.decimal!;
+      out += format(counterValues.get(args[0] ?? "") ?? 0);
+    }
+  };
 
   // アイコン書体が字を割り当てる私用領域。面15と16は全域が私用領域なので代理対も見る。
   // 書体を置き換えて描くと豆腐になる
@@ -600,12 +642,15 @@ export function walkPage(): Extraction {
     if (cs.display === "none" || cs.visibility === "hidden") return false;
     const opacity = Number(cs.opacity);
     if (opacity === 0) return false;
+    // 番号を進めるのは擬似要素の側という書き方が多い（朝日新聞のランキング）
+    applyCounters(cs.counterReset, true);
+    applyCounters(cs.counterIncrement, false);
     const inner: Ctx = {
       ...ctx,
       alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
     };
     const r = pseudoRect(cs, parent);
-    const text = CONTENT_TEXT.exec(content)?.[1];
+    const text = contentText(content);
     if (text !== undefined && PUA.test(text)) return true;
     // 流れの中に置かれた擬似要素は位置を起こせない
     if (!r) return cs.backgroundImage !== "none" || text === undefined;
@@ -732,6 +777,8 @@ export function walkPage(): Extraction {
       ) {
         continue;
       }
+      applyCounters(cs.counterReset, true);
+      applyCounters(cs.counterIncrement, false);
       // display:contentsは箱を作らないので矩形が0x0で返る
       if (cs.display === "contents") {
         const through: Ctx = { ...ctx };
