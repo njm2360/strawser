@@ -599,8 +599,12 @@ export function walkPage(): Extraction {
       const inner: Ctx = {
         link: ctx.link,
         clip: cs.overflow === "visible" ? ctx.clip : r,
-        // text-overflowは継承しないので、切り取り枠を作った要素のものを持ち回る
-        ellipsis: cs.overflow === "visible" ? ctx.ellipsis : cs.textOverflow === "ellipsis",
+        // text-overflowは継承しないので、切り取り枠を作った要素のものを持ち回る。
+        // あふれているかはブラウザの丸めた値で見る。矩形どうしの差は1px未満でも正になる
+        ellipsis:
+          cs.overflow === "visible"
+            ? ctx.ellipsis
+            : cs.textOverflow === "ellipsis" && child.scrollWidth > child.clientWidth,
         stack: layers.stack,
         layer: layers.layer,
         alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
