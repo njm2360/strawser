@@ -220,7 +220,19 @@ export function walkPage(): Extraction {
     ];
   };
 
-  const emitBox = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
+  // outlineはborderの外側に描かれる。端末は枠線を箱の内側へ寄せるので、
+  // 線の分だけ広げた矩形の枠として渡すと位置が合う
+  const emitOutline = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
+    const w = parseFloat(cs.outlineWidth);
+    if (cs.outlineStyle === "none" || !(w > 0)) return;
+    const k = colorId(cs.outlineColor, ctx.alpha);
+    if (k < 0) return;
+    const grow = (parseFloat(cs.outlineOffset) || 0) + w;
+    const ring = { x: r.x - grow, y: r.y - grow, w: r.w + grow * 2, h: r.h + grow * 2 };
+    push({ t: 0, b: box(ring), k, kw: round(w) }, ctx, ring);
+  };
+
+  const emitBorderBox = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
     const bg = colorId(cs.backgroundColor, ctx.alpha);
     const bw = [
       parseFloat(cs.borderTopWidth),
@@ -273,6 +285,11 @@ export function walkPage(): Extraction {
       }
     }
     if (op.f !== undefined || op.k !== undefined || op.sh !== undefined) push(op, ctx, r);
+  };
+
+  const emitBox = (cs: CSSStyleDeclaration, r: Rect, ctx: Ctx): void => {
+    emitBorderBox(cs, r, ctx);
+    emitOutline(cs, r, ctx);
   };
 
   // 行の境目は二分探索で探す。1文字ずつ測ると日本語の長文で桁が変わる。
