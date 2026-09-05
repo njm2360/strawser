@@ -3,10 +3,13 @@ package com.njm2360.strawser.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -51,9 +54,14 @@ fun BrowserScreen(
     } else {
         configuration.screenWidthDp
     }
-    // ビューポート高さをIMEで変えるとサーバーが毎回撮り直すので、実測せず画面高さから引く
-    val viewportH = (configuration.screenHeightDp - URL_BAR_HEIGHT.value.roundToInt())
-        .coerceAtLeast(320)
+    // ビューポート高さをIMEで変えるとサーバーが毎回撮り直すので、実測せず画面高さから引く。
+    // systemBarsはIMEでは動かない。ここがずれると画面に貼り付くopが画面の外に置かれる
+    val bars = WindowInsets.systemBars.asPaddingValues()
+    val viewportH = (
+        configuration.screenHeightDp - URL_BAR_HEIGHT.value.roundToInt() -
+            bars.calculateTopPadding().value.roundToInt() -
+            bars.calculateBottomPadding().value.roundToInt()
+        ).coerceAtLeast(320)
     // helloは接続時に送られるので、そのときの最新値を読めるようにしておく
     val currentViewport by rememberUpdatedState(ClientMsg.Viewport(viewportW, viewportH, density))
 
