@@ -450,10 +450,13 @@ export function walkPage(): Extraction {
     }
   };
 
+  // detailsの開閉はsummaryの::markerで示される
   const MARKERS: Record<string, string> = {
     disc: "•",
     circle: "◦",
     square: "▪",
+    "disclosure-closed": "▸",
+    "disclosure-open": "▾",
   };
 
   const LATIN = "abcdefghijklmnopqrstuvwxyz";
