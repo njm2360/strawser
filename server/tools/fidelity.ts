@@ -63,12 +63,21 @@ function toSvg(dl: DisplayList, height: number, assets: Map<number, string>): st
     } else if (op.t === 1) {
       const f = dl.fonts[op.fo!]!;
       const [size, weight, italic, fam, ls, ascent] = f as number[];
+      let glow = "";
+      if (op.sh) {
+        const [dx, dy, blur, col] = op.sh as [number, number, number, number];
+        defs.push(
+          `<filter id="t${n}"><feDropShadow dx="${dx}" dy="${dy}" stdDeviation="${blur / 2}" flood-color="${dl.colors[col]}"/></filter>`,
+        );
+        glow = ` filter="url(#t${n})"`;
+      }
       out.push(
         `<text x="${x}" y="${y + (ascent ?? size! * 0.8)}" font-size="${size}" font-weight="${weight}"` +
           (italic ? ` font-style="italic"` : "") +
           ` font-family="${FAMILY[fam!]}" fill="${dl.colors[op.co!]}"` +
           (ls ? ` letter-spacing="${ls}"` : "") +
           (op.u ? ` text-decoration="${DECORATION[op.u]}"` : "") +
+          glow +
           ` textLength="${w}" lengthAdjust="spacingAndGlyphs"${clip} xml:space="preserve">${esc(op.s!)}</text>`,
       );
     } else if (op.t === 2) {

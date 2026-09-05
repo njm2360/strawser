@@ -530,7 +530,18 @@ private fun drawText(canvas: Canvas, paint: Paint, page: VectorPage, op: DrawOp)
     if (!textPaint(paint, page, op)) return
     val font = page.list.fonts[op.fo]
     val ascent = font.getOrElse(5) { font[0] * 0.8f }
+    val shadowed = op.sh.size == 4 && op.sh[3].toInt() in page.colors.indices
+    // ぼかし0はsetShadowLayerが受け付けない
+    if (shadowed) {
+        paint.setShadowLayer(
+            op.sh[2].coerceAtLeast(0.1f),
+            op.sh[0],
+            op.sh[1],
+            page.colors[op.sh[3].toInt()],
+        )
+    }
     canvas.drawText(op.s, op.b[0], op.b[1] + ascent, paint)
+    if (shadowed) paint.clearShadowLayer()
 }
 
 private val typefaces = HashMap<Int, Typeface>()

@@ -339,6 +339,8 @@ export function walkPage(): Extraction {
     const u =
       (decoration.includes("underline") ? 1 : 0) | (decoration.includes("line-through") ? 2 : 0);
     if (u) op.u = u;
+    const shadow = parseShadow(cs.textShadow, ctx.alpha);
+    if (shadow) op.sh = shadow;
     if (ctx.link !== undefined) op.a = ctx.link;
     push(op, ctx, r);
   };
