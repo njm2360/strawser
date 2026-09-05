@@ -27,9 +27,16 @@ export interface Extraction {
 interface Ctx {
   link: number | undefined;
   clip: Rect | undefined;
+  ellipsis: boolean;
   stack: number[];
   layer: number[];
   alpha: number;
+}
+
+interface Line {
+  r: DOMRect;
+  t: string;
+  start: number; // nodeValue内の開始位置。省略記号を足すときここから測り直す
 }
 
 interface Rect {
@@ -129,6 +136,13 @@ export function walkPage(): Extraction {
   const measure = document.createElement("canvas").getContext("2d")!;
   const FAMILY = ["sans-serif", "serif", "monospace"];
 
+  const setMeasureFont = (cs: CSSStyleDeclaration): void => {
+    const italic = cs.fontStyle === "italic" ? "italic " : "";
+    const weight = parseInt(cs.fontWeight) || 400;
+    const family = FAMILY[familyClass(cs.fontFamily)];
+    measure.font = `${italic}${weight} ${parseFloat(cs.fontSize)}px ${family}`;
+  };
+
   const fontId = (cs: CSSStyleDeclaration): number => {
     const size = Math.round(parseFloat(cs.fontSize) * 10) / 10;
     const weight = parseInt(cs.fontWeight) || 400;
@@ -140,7 +154,7 @@ export function walkPage(): Extraction {
     if (id === undefined) {
       id = fonts.length;
       // 端末へ渡すのは行の上端だけなので、ベースラインまでの距離をここで測る
-      measure.font = `${italic ? "italic " : ""}${weight} ${size}px ${FAMILY[fam]}`;
+      setMeasureFont(cs);
       const m = measure.measureText("Mg亜");
       const ascent = Math.round((m.fontBoundingBoxAscent || size * 0.8) * 10) / 10;
       fonts.push([size, weight, italic, fam, ls, ascent]);
@@ -263,14 +277,14 @@ export function walkPage(): Extraction {
 
   // 行の境目は二分探索で探す。1文字ずつ測ると日本語の長文で桁が変わる
   const range = document.createRange();
-  const lineRects = (node: Text): { r: DOMRect; t: string }[] => {
+  const lineRects = (node: Text): Line[] => {
     const text = node.nodeValue ?? "";
     if (!text.trim()) return [];
     range.selectNodeContents(node);
     const found = range.getClientRects();
     if (found.length === 0) return [];
-    if (found.length === 1) return [{ r: found[0]!, t: text }];
-    const out: { r: DOMRect; t: string }[] = [];
+    if (found.length === 1) return [{ r: found[0]!, t: text, start: 0 }];
+    const out: Line[] = [];
     let start = 0;
     for (let i = 0; i < found.length - 1; i++) {
       let lo = start;
@@ -286,14 +300,14 @@ export function walkPage(): Extraction {
       range.setStart(node, start);
       range.setEnd(node, lo);
       const r = range.getBoundingClientRect();
-      if (r.width > 0) out.push({ r, t: text.slice(start, lo) });
+      if (r.width > 0) out.push({ r, t: text.slice(start, lo), start });
       start = lo;
     }
     if (start < text.length) {
       range.setStart(node, start);
       range.setEnd(node, text.length);
       const r = range.getBoundingClientRect();
-      if (r.width > 0) out.push({ r, t: text.slice(start) });
+      if (r.width > 0) out.push({ r, t: text.slice(start), start });
     }
     return out;
   };
@@ -322,13 +336,45 @@ export function walkPage(): Extraction {
     return out;
   };
 
+  const ELLIPSIS = "…";
+
+  // 1行省略の要素はテキストノードに全文を持ったまま。切らずに送ると端末は全文を
+  // 箱の幅へ詰めるので、…が出ないまま行末が断ち切られる
+  const ellipsize = (
+    node: Text,
+    line: Line,
+    cs: CSSStyleDeclaration,
+    right: number,
+  ): { end: number; w: number } => {
+    setMeasureFont(cs);
+    const dots = measure.measureText(ELLIPSIS).width;
+    let lo = 0;
+    let hi = line.t.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      range.setStart(node, line.start);
+      range.setEnd(node, line.start + mid);
+      if (range.getBoundingClientRect().right + sx + dots <= right) lo = mid;
+      else hi = mid - 1;
+    }
+    range.setStart(node, line.start);
+    range.setEnd(node, line.start + lo);
+    return { end: lo, w: range.getBoundingClientRect().width + dots };
+  };
+
   const emitText = (node: Text, cs: CSSStyleDeclaration, ctx: Ctx): void => {
     const pre = PRE_SPACE.has(cs.whiteSpace);
     for (const line of lineRects(node)) {
-      const t = pre ? keepSpaces(line.t, cs) : line.t.replace(/\s+/g, " ");
-      if (!t.trim()) continue;
       const r = { x: line.r.left + sx, y: line.r.top + sy, w: line.r.width, h: line.r.height };
-      if (ctx.clip && (r.y + r.h <= ctx.clip.y || r.y >= ctx.clip.y + ctx.clip.h)) continue;
+      if (outside(r, ctx.clip)) continue;
+      const cut =
+        ctx.ellipsis && ctx.clip && r.x + r.w > ctx.clip.x + ctx.clip.w
+          ? ellipsize(node, line, cs, ctx.clip.x + ctx.clip.w)
+          : undefined;
+      const src = cut ? line.t.slice(0, cut.end) : line.t;
+      const t = (pre ? keepSpaces(src, cs) : src.replace(/\s+/g, " ")) + (cut ? ELLIPSIS : "");
+      if (!t.trim()) continue;
+      if (cut) r.w = cut.w;
       emitLine(cs, r, t, ctx);
     }
   };
@@ -546,6 +592,8 @@ export function walkPage(): Extraction {
       const inner: Ctx = {
         link: ctx.link,
         clip: cs.overflow === "visible" ? ctx.clip : r,
+        // text-overflowは継承しないので、切り取り枠を作った要素のものを持ち回る
+        ellipsis: cs.overflow === "visible" ? ctx.ellipsis : cs.textOverflow === "ellipsis",
         stack: layers.stack,
         layer: layers.layer,
         alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
@@ -624,7 +672,15 @@ export function walkPage(): Extraction {
     }
   };
 
-  walk(document.body, { link: undefined, clip: undefined, stack: [], layer: [FLOW], alpha: 1 }, 0);
+  const root: Ctx = {
+    link: undefined,
+    clip: undefined,
+    ellipsis: false,
+    stack: [],
+    layer: [FLOW],
+    alpha: 1,
+  };
+  walk(document.body, root, 0);
 
   // 同じ経路はDOM順のまま。Array.sortが安定であることに頼っている
   layered.sort((a, b) => {
