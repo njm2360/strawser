@@ -955,17 +955,20 @@ export function walkPage(): Extraction {
         continue;
       }
       const gradient = cs.backgroundImage === "none" ? undefined : parseGradient(cs, r, own.alpha);
+      // 行をまたぐインライン要素の矩形は行ごとに返る。まとめた1つで塗ると行間まで埋まり、
+      // 折り返した先の行が丸ごと背景色になる（MDNの<code>）
+      const inlineRects = cs.display === "inline" ? child.getClientRects() : undefined;
+      const fragments = inlineRects && inlineRects.length > 1 ? inlineRects : undefined;
+      // まとめた矩形は行の端まで伸びる。背景として撮ると隣の文字が焼き付き、
+      // opでも描かれるので二重になる（Wikipediaの脚注のリンク）。
       // 背景の上に子の文字が乗るので、ラスタにしても走査は続ける
-      if (cs.backgroundImage !== "none" && !gradient && r.w >= 8 && r.h >= 8) {
+      if (cs.backgroundImage !== "none" && !gradient && !fragments && r.w >= 8 && r.h >= 8) {
         raster(child, r, own, true);
         walk(child, inner, depth + 1);
         continue;
       }
 
-      // 行をまたぐインライン要素は矩形が行ごとに返る。まとめた1つで塗ると行間まで埋まり、
-      // 折り返した先の行が丸ごと背景色になる（MDNの<code>）
-      const fragments = cs.display === "inline" ? child.getClientRects() : undefined;
-      if (fragments !== undefined && fragments.length > 1) {
+      if (fragments) {
         for (const f of fragments) {
           emitBox(cs, { x: f.left + sx, y: f.top + sy, w: f.width, h: f.height }, own, gradient);
         }
