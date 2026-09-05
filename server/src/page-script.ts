@@ -21,10 +21,13 @@ export interface Extraction {
   rects: AssetRect[];
 }
 
-// layerは重ね合わせ文脈をたどった経路。辞書順で比べると描画順になる
+// layerはopを置く塗り順の経路。三つ組[段、z-index、文書順]を重ね合わせ文脈の入れ子ぶん
+// 並べ、末尾に段を1つ置く。辞書順で比べると描画順になる。
+// stackは今いる重ね合わせ文脈の経路で、子の三つ組はここへ継ぎ足す
 interface Ctx {
   link: number | undefined;
   clip: Rect | undefined;
+  stack: number[];
   layer: number[];
   alpha: number;
 }
@@ -452,14 +455,29 @@ export function walkPage(): Extraction {
     return role !== null && role.split(/\s+/).some((r) => ACTIVATION_ROLES.has(r));
   };
 
-  // 重ね合わせ文脈を作る要素だけ経路を伸ばす
-  const layerOf = (cs: CSSStyleDeclaration, parent: number[]): number[] => {
-    const z = cs.position === "static" ? NaN : parseInt(cs.zIndex);
-    if (Number.isFinite(z)) return [...parent, z];
-    if (Number(cs.opacity) < 1 || cs.transform !== "none" || cs.filter !== "none") {
-      return [...parent, 0];
-    }
-    return parent;
+  // 塗り順の段（CSS2.1付録E）。SELFは文脈を作った要素自身の背景、FLOWはその中の通常フロー
+  const SELF = 0;
+  const BELOW = 1;
+  const FLOW = 2;
+  const ABOVE = 3;
+  let order = 0;
+
+  // opacityとtransformとfilterで文脈を作る要素は、位置指定でなくてもz:0の位置指定と同じ段。
+  // z:autoの位置指定は文脈を作らないので、中の位置指定要素は外の文脈に属したままにする
+  const layersOf = (cs: CSSStyleDeclaration, ctx: Ctx) => {
+    const positioned = cs.position !== "static";
+    const z = positioned ? parseInt(cs.zIndex) : NaN;
+    const context =
+      Number.isFinite(z) ||
+      Number(cs.opacity) < 1 ||
+      cs.transform !== "none" ||
+      cs.filter !== "none";
+    if (!positioned && !context) return { stack: ctx.stack, layer: ctx.layer, own: ctx.layer };
+    const zi = Number.isFinite(z) ? z : 0;
+    const step = [...ctx.stack, zi < 0 ? BELOW : ABOVE, zi, order++];
+    const layer = [...step, FLOW];
+    if (!context) return { stack: ctx.stack, layer, own: layer };
+    return { stack: step, layer, own: [...step, SELF] };
   };
 
   const walk = (el: Element, ctx: Ctx, depth: number): void => {
@@ -508,34 +526,37 @@ export function walkPage(): Extraction {
       // 画像が撮れないままクライアントが要求し続け、キューが詰まる
       if (r.x >= pageWidth || r.x + r.w <= 0) continue;
 
+      const layers = layersOf(cs, ctx);
       const inner: Ctx = {
         link: ctx.link,
         clip: cs.overflow === "visible" ? ctx.clip : r,
-        layer: layerOf(cs, ctx.layer),
+        stack: layers.stack,
+        layer: layers.layer,
         alpha: ctx.alpha * (Number.isFinite(opacity) ? opacity : 1),
       };
-      if (clickable(child, tag)) {
-        inner.link = idOf(child);
-        // インライン要素の枠は行をまたぐと行間まで含む。中の文字と画像のopが
-        // 同じnodeIdを持つので当たり判定は要らない
-        if (cs.display !== "inline" && child.getClientRects().length === 1) {
-          push({ t: 3, b: box(r), a: inner.link }, inner, r);
-        }
+      const link = clickable(child, tag) ? idOf(child) : undefined;
+      if (link !== undefined) inner.link = link;
+      // 自身の背景は文脈の最初の段。負のzの子はこの上に乗る
+      const own: Ctx = layers.own === layers.layer ? inner : { ...inner, layer: layers.own };
+      // インライン要素の枠は行をまたぐと行間まで含む。中の文字と画像のopが
+      // 同じnodeIdを持つので当たり判定は要らない
+      if (link !== undefined && cs.display !== "inline" && child.getClientRects().length === 1) {
+        push({ t: 3, b: box(r), a: link }, own, r);
       }
 
       if (RASTER.has(tag)) {
-        raster(child, r, inner, false);
+        raster(child, r, own, false);
         continue;
       }
       // background-colorをマスクで抜いてアイコンにする書き方。
       // 色で塗るだけだと絵が四角い塊になる
       if (maskOf(cs) !== "none" && r.w >= 4 && r.h >= 4) {
-        raster(child, r, inner, true);
+        raster(child, r, own, true);
         continue;
       }
       // 背景の上に子の文字が乗るので、ラスタにしても走査は続ける
       if (cs.backgroundImage !== "none" && r.w >= 8 && r.h >= 8) {
-        raster(child, r, inner, true);
+        raster(child, r, own, true);
         walk(child, inner, depth + 1);
         continue;
       }
@@ -545,15 +566,15 @@ export function walkPage(): Extraction {
       const fragments = cs.display === "inline" ? child.getClientRects() : undefined;
       if (fragments !== undefined && fragments.length > 1) {
         for (const f of fragments) {
-          emitBox(cs, { x: f.left + sx, y: f.top + sy, w: f.width, h: f.height }, inner);
+          emitBox(cs, { x: f.left + sx, y: f.top + sy, w: f.width, h: f.height }, own);
         }
       } else {
-        emitBox(cs, r, inner);
+        emitBox(cs, r, own);
       }
       const iconic =
         emitPseudo(child, "::before", r, inner) || emitPseudo(child, "::after", r, inner);
       if (iconic && !hasText(child)) {
-        raster(child, r, inner, true);
+        raster(child, r, own, true);
         continue;
       }
       if (FIELD.has(tag)) {
@@ -587,7 +608,7 @@ export function walkPage(): Extraction {
     }
   };
 
-  walk(document.body, { link: undefined, clip: undefined, layer: [], alpha: 1 }, 0);
+  walk(document.body, { link: undefined, clip: undefined, stack: [], layer: [FLOW], alpha: 1 }, 0);
 
   // 同じ経路はDOM順のまま。Array.sortが安定であることに頼っている
   layered.sort((a, b) => {
