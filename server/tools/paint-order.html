@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>塗り順の検証</title>
+    <style>
+      body {
+        margin: 0;
+        background: #fff;
+        color: #222;
+        font: 13px/1.4 sans-serif;
+      }
+      h1 {
+        margin: 8px;
+        font-size: 15px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 6px 8px;
+      }
+      .stage {
+        position: relative;
+        flex: none;
+        width: 130px;
+        height: 130px;
+      }
+      .cap b {
+        display: block;
+        font-size: 12px;
+      }
+      .cap span {
+        font-size: 11px;
+        color: #666;
+      }
+      .sq {
+        width: 80px;
+        height: 80px;
+      }
+      .r {
+        background: #e02020;
+      }
+      .g {
+        background: #14a02a;
+      }
+      .b {
+        background: #1050e0;
+      }
+      /* 突き合わせる点。大きさを持たないので描画には出ない */
+      i {
+        position: absolute;
+        width: 0;
+        height: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>塗り順の検証</h1>
+
+    <div class="row">
+      <div class="stage">
+        <div class="sq r"></div>
+        <div class="sq b" style="margin: -40px 0 0 20px"></div>
+        <i style="left: 30px; top: 60px" data-probe="通常フローは文書順"></i>
+      </div>
+      <div class="cap"><b>青</b><span>後の兄弟が上</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div class="sq b" style="position: absolute; left: 0; top: 0"></div>
+        <div class="sq r" style="margin-left: 20px"></div>
+        <i style="left: 30px; top: 30px" data-probe="A-1 absoluteは通常フローの上"></i>
+      </div>
+      <div class="cap">
+        <b>青</b><span>先に置いたabsolute（z:auto）が後の通常フローより上</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div class="sq b" style="position: relative"></div>
+        <div class="sq r" style="margin: -40px 0 0 20px"></div>
+        <i style="left: 30px; top: 50px" data-probe="A-1 relativeは通常フローの上"></i>
+      </div>
+      <div class="cap">
+        <b>青</b><span>先に置いたrelative（z:auto）が後の通常フローより上</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="stage" style="background: #14a02a">
+        <div class="sq r" style="position: absolute; left: 10px; top: 10px; z-index: -1"></div>
+        <i style="left: 40px; top: 40px" data-probe="A-2 負のzは文脈を作らない親の背景の下"></i>
+      </div>
+      <div class="cap">
+        <b>緑</b><span>親がz:autoなので赤は外の文脈へ抜け、親の背景に隠れる</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="stage" style="background: #14a02a; z-index: 0">
+        <div class="sq r" style="position: absolute; left: 10px; top: 10px; z-index: -1"></div>
+        <div style="width: 80px; height: 50px; margin: 50px 0 0 40px; background: #1050e0"></div>
+        <i style="left: 25px; top: 25px" data-probe="A-2 負のzは文脈の背景の上"></i>
+        <i style="left: 60px; top: 70px" data-probe="A-2 負のzは通常フローの下"></i>
+      </div>
+      <div class="cap">
+        <b>赤 / 青</b><span>親が文脈を作る場合、負のzは親の背景と通常フローのあいだ</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div style="position: absolute; left: 0; top: 0; width: 110px; height: 110px">
+          <div class="sq r" style="margin: 20px 0 0 20px"></div>
+        </div>
+        <div
+          style="
+            position: absolute;
+            left: 40px;
+            top: 40px;
+            width: 70px;
+            height: 60px;
+            background: #14a02a;
+          "
+        ></div>
+        <i style="left: 60px; top: 60px" data-probe="位置指定の兄弟は中身ごと文書順"></i>
+      </div>
+      <div class="cap"><b>緑</b><span>後の兄弟は前の兄弟の中身より上</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div class="sq b" style="position: absolute; left: 0; top: 0; z-index: 2"></div>
+        <div class="sq g" style="position: absolute; left: 20px; top: 20px; z-index: 3"></div>
+        <div class="sq r" style="position: absolute; left: 40px; top: 40px; z-index: 1"></div>
+        <i style="left: 60px; top: 60px" data-probe="zの大小"></i>
+      </div>
+      <div class="cap"><b>緑</b><span>z:3が最前面</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div style="position: absolute; left: 0; top: 0; width: 110px; height: 110px; z-index: 1">
+          <div class="sq r" style="position: absolute; left: 20px; top: 20px; z-index: 99"></div>
+        </div>
+        <div class="sq g" style="position: absolute; left: 40px; top: 40px; z-index: 2"></div>
+        <i style="left: 60px; top: 60px" data-probe="入れ子のzは外へ漏れない"></i>
+      </div>
+      <div class="cap"><b>緑</b><span>z:1の中のz:99は外のz:2を越えない</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div style="position: absolute; left: 0; top: 0; width: 110px; height: 110px">
+          <div class="sq r" style="position: absolute; left: 10px; top: 10px; z-index: -1"></div>
+        </div>
+        <div style="width: 100px; height: 50px; margin: 30px 0 0 20px; background: #1050e0"></div>
+        <i style="left: 40px; top: 50px" data-probe="z:autoの内側の負のzは外の文脈へ"></i>
+      </div>
+      <div class="cap"><b>青</b><span>親がz:autoだと負のzは親の外へ出て通常フローの下へ</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div class="sq r" style="transform: translate(0)"></div>
+        <div class="sq b" style="margin: -40px 0 0 20px"></div>
+        <i style="left: 30px; top: 50px" data-probe="transformはz:0の位置指定と同じ段"></i>
+      </div>
+      <div class="cap"><b>赤</b><span>位置指定でなくても通常フローより上</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div class="sq r" style="filter: brightness(1)"></div>
+        <div class="sq b" style="margin: -40px 0 0 20px"></div>
+        <i style="left: 30px; top: 50px" data-probe="filterはz:0の位置指定と同じ段"></i>
+      </div>
+      <div class="cap"><b>赤</b><span>位置指定でなくても通常フローより上</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage">
+        <div class="sq r" style="z-index: 9"></div>
+        <div class="sq b" style="margin: -40px 0 0 20px"></div>
+        <i style="left: 30px; top: 50px" data-probe="staticのz-indexは効かない"></i>
+      </div>
+      <div class="cap"><b>青</b><span>位置指定でない要素のz-indexは無視される</span></div>
+    </div>
+
+    <div class="row">
+      <div class="stage" style="background: #fff; z-index: 0">
+        <div class="sq b" style="position: absolute; left: 10px; top: 10px; z-index: -2"></div>
+        <div class="sq r" style="position: absolute; left: 30px; top: 30px; z-index: -1"></div>
+        <i style="left: 50px; top: 50px" data-probe="負のz同士の大小"></i>
+      </div>
+      <div class="cap"><b>赤</b><span>z:-1がz:-2の上</span></div>
+    </div>
+  </body>
+</html>
