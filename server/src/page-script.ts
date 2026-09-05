@@ -275,8 +275,20 @@ export function walkPage(): Extraction {
     if (op.f !== undefined || op.k !== undefined || op.sh !== undefined) push(op, ctx, r);
   };
 
-  // 行の境目は二分探索で探す。1文字ずつ測ると日本語の長文で桁が変わる
+  // 行の境目は二分探索で探す。1文字ずつ測ると日本語の長文で桁が変わる。
+  // 1行が矩形2つ以上で返る作りがある（-webkit-line-clampの省略行は同じ行を2度、
+  // preのタブは送り分を別に返す）ので、数ではなく上端の揃いで見る
   const range = document.createRange();
+  const oneLine = (): boolean => {
+    const rects = range.getClientRects();
+    const top = rects[0]?.top;
+    if (top === undefined) return true;
+    for (const r of rects) {
+      if (Math.abs(r.top - top) > 0.5) return false;
+    }
+    return true;
+  };
+
   const lineRects = (node: Text): Line[] => {
     const text = node.nodeValue ?? "";
     if (!text.trim()) return [];
@@ -293,7 +305,7 @@ export function walkPage(): Extraction {
         const mid = (lo + hi + 1) >> 1;
         range.setStart(node, start);
         range.setEnd(node, mid);
-        if (range.getClientRects().length <= 1) lo = mid;
+        if (oneLine()) lo = mid;
         else hi = mid - 1;
       }
       if (lo <= start) break;
